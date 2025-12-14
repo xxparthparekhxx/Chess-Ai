@@ -1,60 +1,67 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import IterableDataset, DataLoader
 import numpy as np
 import os
 import glob
+import random
 from model import ChessNet
 from config import PROCESSED_DIR, BATCH_SIZE, LEARNING_RATE, EPOCHS, DEVICE, MODEL_PATH, NUM_RES_BLOCKS
 
-class ChessDataset(Dataset):
-    def __init__(self, data_dir):
+class ChessIterableDataset(IterableDataset):
+    def __init__(self, data_dir, shuffle_chunks=True):
         self.files = glob.glob(os.path.join(data_dir, "*.npz"))
         if not self.files:
             raise FileNotFoundError(f"No .npz files found in {data_dir}. Run preprocess.py first.")
-        
-        # Load all data into memory (simplest for now, though Memory Mapping is better for huge datasets)
-        # For a "Lite" version, we can iterate files, but let's try to load what we can.
-        # If dataset is huge, we should implement an IterableDataset or load lazily.
-        # Here we assume it fits in RAM for simplicity or we load just one file per epoch (naive).
-        # Better approach for scalable training:
+        self.shuffle_chunks = shuffle_chunks
         print(f"Found {len(self.files)} data chunks.")
-        self.inputs = []
-        self.policies = []
-        self.values = []
         
-        for f in self.files:
-            print(f"Loading {f}...")
-            data = np.load(f)
-            self.inputs.append(data['inputs'])
-            self.policies.append(data['policies'])
-            self.values.append(data['values'])
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        
+        # If multi-worker, split files among workers
+        if worker_info is None:
+            files_to_read = self.files
+        else:
+            per_worker = int(np.ceil(len(self.files) / float(worker_info.num_workers)))
+            worker_id = worker_info.id
+            start = worker_id * per_worker
+            end = min(start + per_worker, len(self.files))
+            files_to_read = self.files[start:end]
             
-        self.inputs = np.concatenate(self.inputs)
-        self.policies = np.concatenate(self.policies)
-        self.values = np.concatenate(self.values)
-        
-        print(f"Total samples: {len(self.inputs)}")
-
-    def __len__(self):
-        return len(self.inputs)
-
-    def __getitem__(self, idx):
-        return (
-            torch.tensor(self.inputs[idx], dtype=torch.float32),
-            torch.tensor(self.policies[idx], dtype=torch.long),
-            torch.tensor(self.values[idx], dtype=torch.float32)
-        )
+        if self.shuffle_chunks:
+            random.shuffle(files_to_read)
+            
+        for f in files_to_read:
+            # print(f"Loading {f}...") # Too verbose for training
+            data = np.load(f)
+            inputs = data['inputs']
+            policies = data['policies']
+            values = data['values']
+            
+            # Shuffle within the chunk
+            indices = np.arange(len(inputs))
+            if self.shuffle_chunks:
+                np.random.shuffle(indices)
+                
+            for i in indices:
+                yield (
+                    torch.tensor(inputs[i], dtype=torch.float32),
+                    torch.tensor(policies[i], dtype=torch.long),
+                    torch.tensor(values[i], dtype=torch.float32)
+                )
 
 def train():
     try:
-        dataset = ChessDataset(PROCESSED_DIR)
+        # Use IterableDataset for lazy loading
+        dataset = ChessIterableDataset(PROCESSED_DIR, shuffle_chunks=True)
     except FileNotFoundError as e:
         print(e)
         return
 
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+    # shuffle=False is required for IterableDataset
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     
     model = ChessNet(num_res_blocks=NUM_RES_BLOCKS).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
@@ -63,37 +70,38 @@ def train():
     criterion_policy = nn.CrossEntropyLoss()
     criterion_value = nn.MSELoss()
     
+    if os.path.exists(MODEL_PATH):
+        print(f"Resuming form {MODEL_PATH}")
+        model.load_state_dict(torch.load(MODEL_PATH))
+
     model.train()
     
     for epoch in range(EPOCHS):
         total_loss = 0
+        batch_count = 0
+        
         for batch_idx, (inputs, target_policy, target_value) in enumerate(dataloader):
             inputs, target_policy, target_value = inputs.to(DEVICE), target_policy.to(DEVICE), target_value.to(DEVICE)
             
             optimizer.zero_grad()
-            
             pred_policy, pred_value = model(inputs)
             
-            # Policy Loss: CrossEntropy expects (N, C) and (N)
             loss_p = criterion_policy(pred_policy, target_policy)
-            
-            # Value Loss: MSE expects (N, 1) and (N) or (N, 1)
-            # target_value is (N), reshape to (N, 1)
             loss_v = criterion_value(pred_value.view(-1), target_value.view(-1))
-            
             loss = loss_p + 0.5 * loss_v
             
             loss.backward()
             optimizer.step()
             
             total_loss += loss.item()
+            batch_count = batch_idx
             
-            if batch_idx % 10 == 0:
+            if batch_idx % 100 == 0:
                 print(f"Epoch {epoch+1}/{EPOCHS}, Batch {batch_idx}, Loss: {loss.item():.4f} (P: {loss_p.item():.4f}, V: {loss_v.item():.4f})")
         
-        print(f"Epoch {epoch+1} Completed. Avg Loss: {total_loss / len(dataloader):.4f}")
+        avg_loss = total_loss / (batch_count + 1) if batch_count > 0 else 0
+        print(f"Epoch {epoch+1} Completed. Avg Loss: {avg_loss:.4f}")
         
-        # Save Checkpoint
         torch.save(model.state_dict(), MODEL_PATH)
         print(f"Model saved to {MODEL_PATH}")
 
