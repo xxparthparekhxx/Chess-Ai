@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChessAI - Grandmaster Level</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <!-- Chess Libraries -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+    <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>ChessAI <span class="badge">PRO</span></h1>
+        <p>Powered by ResNet + AlphaZero Logic</p>
+    </header>
+
+    <div class="game-area">
+        <div class="board-container">
+            <div id="myBoard" style="width: 100%"></div>
+        </div>
+
+        <div class="panel">
+            <div class="status-box">
+                <h3>Game Status</h3>
+                <div id="status">White to move</div>
+            </div>
+            
+            <div class="eval-box">
+                <h3>AI Evaluation</h3>
+                <div id="evaluation">0.0</div>
+                <div class="bar-container">
+                    <div id="eval-bar" class="bar"></div>
+                </div>
+            </div>
+
+            <div class="history-box">
+                <h3>PGN History</h3>
+                <div id="pgn"></div>
+            </div>
+
+            <div class="controls">
+                <button id="resetBtn" class="btn primary">New Game</button>
+                <button id="flipBtn" class="btn secondary">Flip Board</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+</body>
+</html>
