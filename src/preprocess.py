@@ -5,7 +5,7 @@ import glob
 from dataset import board_to_tensor, MOVE_TO_INT
 from config import DATA_DIR, PROCESSED_DIR
 
-def process_pgn(pgn_file_path, batch_size=10000):
+def process_pgn(pgn_file_path, batch_size=10000, start_index=0):
     print(f"Processing {pgn_file_path}...")
     pgn = open(pgn_file_path, encoding='utf-8')
     
@@ -14,7 +14,7 @@ def process_pgn(pgn_file_path, batch_size=10000):
     value_targets = []
     
     game_count = 0
-    batch_index = 0
+    batch_index = start_index
 
     while True:
         game = chess.pgn.read_game(pgn)
@@ -69,6 +69,7 @@ def process_pgn(pgn_file_path, batch_size=10000):
         save_batch(inputs, policy_targets, value_targets, batch_index)
         
     print(f"Done. Processed {game_count} games.")
+    return batch_index
 
 def save_batch(inputs, policies, values, index):
     filename = os.path.join(PROCESSED_DIR, f"chunk_{index}.npz")
@@ -86,5 +87,6 @@ if __name__ == "__main__":
     if not pgn_files:
         print(f"No PGN files found in {DATA_DIR}")
     else:
+        current_index = 0
         for f in pgn_files:
-            process_pgn(f)
+            current_index = process_pgn(f, start_index=current_index)

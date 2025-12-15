@@ -1,4 +1,5 @@
 import torch
+from tqdm import tqdm
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import IterableDataset, DataLoader
@@ -63,6 +64,11 @@ def train():
     # shuffle=False is required for IterableDataset
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     
+    # Estimate total batches for tqdm
+    # Each chunk has exactly 10,000 samples (from preprocess.py)
+    total_samples = len(dataset.files) * 10000
+    total_batches = total_samples // BATCH_SIZE
+    
     model = ChessNet(num_res_blocks=NUM_RES_BLOCKS).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
@@ -72,7 +78,10 @@ def train():
     
     if os.path.exists(MODEL_PATH):
         print(f"Resuming form {MODEL_PATH}")
-        model.load_state_dict(torch.load(MODEL_PATH))
+        try:
+            model.load_state_dict(torch.load(MODEL_PATH))
+        except Exception:
+            print("Could not load checkpoint, starting fresh.")
 
     model.train()
     
@@ -80,7 +89,10 @@ def train():
         total_loss = 0
         batch_count = 0
         
-        for batch_idx, (inputs, target_policy, target_value) in enumerate(dataloader):
+        # TQDM Progress Bar
+        progress_bar = tqdm(enumerate(dataloader), total=total_batches, desc=f"Epoch {epoch+1}/{EPOCHS}")
+        
+        for batch_idx, (inputs, target_policy, target_value) in progress_bar:
             inputs, target_policy, target_value = inputs.to(DEVICE), target_policy.to(DEVICE), target_value.to(DEVICE)
             
             optimizer.zero_grad()
@@ -96,8 +108,8 @@ def train():
             total_loss += loss.item()
             batch_count = batch_idx
             
-            if batch_idx % 100 == 0:
-                print(f"Epoch {epoch+1}/{EPOCHS}, Batch {batch_idx}, Loss: {loss.item():.4f} (P: {loss_p.item():.4f}, V: {loss_v.item():.4f})")
+            # Update tqdm description with current loss
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", p_loss=f"{loss_p.item():.4f}", v_loss=f"{loss_v.item():.4f}")
         
         avg_loss = total_loss / (batch_count + 1) if batch_count > 0 else 0
         print(f"Epoch {epoch+1} Completed. Avg Loss: {avg_loss:.4f}")

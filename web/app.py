@@ -14,7 +14,10 @@ from config import MODEL_PATH, DEVICE, NUM_RES_BLOCKS
 
 app = Flask(__name__)
 
-# Load Model
+from mcts import MCTS
+
+
+# Load Model (Global)
 print(f"Loading model on {DEVICE}...")
 model = ChessNet(num_res_blocks=NUM_RES_BLOCKS).to(DEVICE)
 if os.path.exists(MODEL_PATH):
@@ -22,45 +25,23 @@ if os.path.exists(MODEL_PATH):
         model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
         print("Model loaded successfully.")
     except Exception as e:
-        print(f"Error loading model (might be saving right now?): {e}")
+        print(f"Error loading model: {e}")
 else:
     print("Warning: No model found. Using random weights.")
 model.eval()
 
+# Global MCTS instance
+mcts = MCTS(model, num_simulations=800)
+
 def get_ai_move_logic(board):
-    # 1. Prepare Input
-    tensor = board_to_tensor(board)
-    tensor = torch.tensor(tensor, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+    # Use MCTS to search for the best move
+    # Temperature 0 for competitive play (greedy selection from MCTS stats)
+    # But for opening/variety we might want temp > 0.
+    # For now, let's use temp=0.5 for first 10 moves, then 0.
+    temp = 0.5 if len(board.move_stack) < 10 else 0.0
     
-    # 2. Model Prediction
-    with torch.no_grad():
-        policy_logits, value = model(tensor)
-    
-    # 3. Create Mask
-    legal_moves = list(board.legal_moves)
-    legal_indices = []
-    for move in legal_moves:
-        uci = move.uci()
-        if uci in MOVE_TO_INT:
-            legal_indices.append(MOVE_TO_INT[uci])
-            
-    if not legal_indices:
-        return None, 0.0
-    
-    # 4. Apply Mask
-    mask = torch.full_like(policy_logits, -float('inf'))
-    mask[0, legal_indices] = 0
-    masked_logits = policy_logits + mask
-    
-    # 5. Select Move
-    probs = F.softmax(masked_logits, dim=1)
-    move_index = torch.argmax(probs).item()
-    move_uci = INT_TO_MOVE[move_index]
-    
-    # Value output (for display)
-    val = value.item()
-    
-    return move_uci, val
+    best_move_uci, eval_value = mcts.search(board)
+    return best_move_uci, eval_value
 
 @app.route('/')
 def index():

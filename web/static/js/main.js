@@ -1,5 +1,9 @@
+// Game State
 var board = null
 var game = new Chess()
+var playerColor = 'w' // Defaults to White
+
+// jQuery elements
 var $status = $('#status')
 var $fen = $('#fen')
 var $pgn = $('#pgn')
@@ -7,60 +11,49 @@ var $eval = $('#evaluation')
 var $bar = $('#eval-bar')
 
 function onDragStart(source, piece, position, orientation) {
-    // do not pick up pieces if the game is over
     if (game.game_over()) return false
 
-    // only pick up pieces for the side to move
-    if (game.turn() === 'w' && piece.search(/^b/) !== -1) return false
-    if (game.turn() === 'b' && piece.search(/^w/) !== -1) return false
+    // Only allow player to move their own pieces
+    if ((playerColor === 'w' && piece.search(/^b/) !== -1) ||
+        (playerColor === 'b' && piece.search(/^w/) !== -1)) {
+        return false
+    }
+
+    // Check turn
+    if ((game.turn() === 'w' && playerColor !== 'w') ||
+        (game.turn() === 'b' && playerColor !== 'b')) {
+        return false
+    }
 }
 
 function onDrop(source, target) {
-    // see if the move is legal
     var move = game.move({
         from: source,
         to: target,
-        promotion: 'q' // NOTE: always promote to a queen for example simplicity
+        promotion: 'q'
     })
 
-    // illegal move
     if (move === null) return 'snapback'
 
     updateStatus()
-
-    // Make AI Move
-    makeAIMove()
+    // Trigger AI move
+    window.setTimeout(makeAIMove, 250)
 }
 
-// update the board position after the piece snap
-// for castling, en passant, pawn promotion
 function onSnapEnd() {
     board.position(game.fen())
 }
 
 function updateStatus() {
     var status = ''
+    var moveColor = (game.turn() === 'b') ? 'Black' : 'White'
 
-    var moveColor = 'White'
-    if (game.turn() === 'b') {
-        moveColor = 'Black'
-    }
-
-    // checkmate?
     if (game.in_checkmate()) {
         status = 'Game over, ' + moveColor + ' is in checkmate.'
-    }
-
-    // draw?
-    else if (game.in_draw()) {
+    } else if (game.in_draw()) {
         status = 'Game over, drawn position'
-    }
-
-    // game still on
-    else {
+    } else {
         status = moveColor + ' to move'
-
-        // check?
         if (game.in_check()) {
             status += ', ' + moveColor + ' is in check'
         }
@@ -71,9 +64,13 @@ function updateStatus() {
 }
 
 function makeAIMove() {
-    if (game.game_over()) return;
+    if (game.game_over()) return
 
-    $status.text("AI is Thinking...");
+    // If it's not AI's turn, do nothing (safety check)
+    // AI is color opposite to playerColor
+    if (game.turn() === playerColor) return
+
+    $status.text("AI is Thinking (MCTS)...");
 
     $.ajax({
         url: '/move',
@@ -82,10 +79,6 @@ function makeAIMove() {
         data: JSON.stringify({ fen: game.fen() }),
         success: function (response) {
             if (response.move) {
-                var move = game.move(response.move, { loose: true }); // UCI format needs loose parsing sometimes or from/to
-                // Chess.js 'move' can take string like 'e2e4' if sloppy? No.
-                // We need to parse UCI 'e2e4' to {from: 'e2', to: 'e4'}
-
                 var from = response.move.substring(0, 2);
                 var to = response.move.substring(2, 4);
                 var promotion = response.move.length > 4 ? response.move.substring(4, 5) : undefined;
@@ -93,45 +86,95 @@ function makeAIMove() {
                 game.move({ from: from, to: to, promotion: promotion });
                 board.position(game.fen());
 
-                // Update eval
                 var evalVal = response.eval.toFixed(2);
                 $eval.text(evalVal);
 
-                // Update bar (sigmoid-ish or clamp?)
-                // Simple clamp -1 to 1 -> 0% to 100%
                 var pct = 50 + (response.eval * 50);
                 pct = Math.max(0, Math.min(100, pct));
                 $bar.css('width', pct + '%');
 
                 updateStatus();
-            } else {
-                console.log(response);
             }
         },
         error: function (err) {
             console.error("AI Error:", err);
-            $status.text("AI Crashed :(");
+            $status.text("AI Error. Check console.");
         }
     });
 }
 
 // Emoji Map
 function pieceTheme(piece) {
-    var pieceMap = {
-        'wP': '♙', 'wN': '♘', 'wB': '♗', 'wR': '♖', 'wQ': '♕', 'wK': '♔',
-        'bP': '♟', 'bN': '♞', 'bB': '♝', 'bR': '♜', 'bQ': '♛', 'bK': '♚'
+    // Use the SAME solid glyphs for both sides to ensure consistent weight and visibility
+    // We will color them using SVG fill/stroke
+    var pieceType = piece.charAt(1).toLowerCase();
+    var solidMap = {
+        'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'q': '♛', 'k': '♚'
     };
-    var emoji = pieceMap[piece] || '';
+    var emoji = solidMap[pieceType] || '';
 
-    // Create an SVG data URI
-    // We center the text and use a large font size
+    var isWhite = piece.charAt(0) === 'w';
+    var fillColor = isWhite ? '#f0f0f0' : '#111';
+    var strokeColor = isWhite ? '#111' : '#fff';
+
     var svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80">
-        <text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="60" fill="gray">${emoji}</text>
-        <text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="60" fill="${piece.charAt(0) === 'w' ? '#f0f0f0' : '#1a1a1a'}" stroke="${piece.charAt(0) === 'w' ? '#000' : '#fff'}" stroke-width="2">${emoji}</text>
+        <!-- Shadow/Outline for visibility -->
+        <text x="50%" y="54%" dominant-baseline="central" text-anchor="middle" font-size="60" fill="rgba(0,0,0,0.2)">${emoji}</text>
+        <!-- Main Piece -->
+        <text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="60" 
+              fill="${fillColor}" 
+              stroke="${strokeColor}" 
+              stroke-width="1.5"
+              style="paint-order: stroke fill;">${emoji}</text>
     </svg>`;
-
     return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+}
+
+// Move Hints Logic
+function removeGreySquares() {
+    $('#myBoard .square-55d63').css('background', '')
+}
+
+function greySquare(square) {
+    var $square = $('#myBoard .square-' + square)
+
+    var background = '#a9a9a9'
+    if ($square.hasClass('black-3c85d')) {
+        background = '#696969'
+    }
+
+    // Using CSS class is cleaner but chessboardjs overrides background-color directly often.
+    // Let's use the radial gradient approach via a class if possible, or direct style.
+    // The user asked for "dots".
+    // style.css has .move-hint that does radial gradient.
+    // However, chessboard.js squares have specific classes.
+    // Let's toggle the class.
+
+    $square.addClass('move-hint')
+}
+
+function onMouseoverSquare(square, piece) {
+    // get list of possible moves for this square
+    var moves = game.moves({
+        square: square,
+        verbose: true
+    })
+
+    // exit if there are no moves available for this square
+    if (moves.length === 0) return
+
+    // highlight the square they moused over
+    // greySquare(square) 
+
+    // highlight the possible squares for this piece
+    for (var i = 0; i < moves.length; i++) {
+        greySquare(moves[i].to)
+    }
+}
+
+function onMouseoutSquare(square, piece) {
+    $('#myBoard .square-55d63').removeClass('move-hint')
 }
 
 var config = {
@@ -140,19 +183,51 @@ var config = {
     onDragStart: onDragStart,
     onDrop: onDrop,
     onSnapEnd: onSnapEnd,
+    onMouseoverSquare: onMouseoverSquare,
+    onMouseoutSquare: onMouseoutSquare,
     pieceTheme: pieceTheme
 }
 board = Chessboard('myBoard', config)
 
 updateStatus()
 
-// Controls
-$('#resetBtn').on('click', function () {
+// --- Controls ---
+
+function resetGame(newColor) {
+    playerColor = newColor;
     game.reset();
     board.start();
+    board.orientation(newColor === 'w' ? 'white' : 'black');
     updateStatus();
     $eval.text("0.0");
     $bar.css('width', '50%');
+
+    // If playing as Black, AI (White) must move first
+    if (playerColor === 'b') {
+        window.setTimeout(makeAIMove, 500);
+    }
+}
+
+$('#playWhiteBtn').on('click', function () {
+    resetGame('w');
+});
+
+$('#playBlackBtn').on('click', function () {
+    resetGame('b');
+});
+
+$('#undoBtn').on('click', function () {
+    // Determine how many moves to undo.
+    // If it's my turn, undo 2 (AI + Me)
+    // If AI is thinking... problem. But we assume button clicked during user turn.
+
+    // Undo AI move
+    game.undo();
+    // Undo Player move
+    game.undo();
+
+    board.position(game.fen());
+    updateStatus();
 });
 
 $('#flipBtn').on('click', function () {

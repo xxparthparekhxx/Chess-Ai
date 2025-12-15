@@ -2,7 +2,7 @@ import torch
 import os
 
 # Hyperparameters
-BATCH_SIZE = 1024
+BATCH_SIZE = 3072
 LEARNING_RATE = 1e-3
 EPOCHS = 10
 NUM_RES_BLOCKS = 10
