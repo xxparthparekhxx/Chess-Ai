@@ -84,7 +84,7 @@ To train the AI on your own PGN datasets:
 
 **How it thinks:**
 
-1.  **Input**: The board state is converted into a **14-plane tensor** (Piece types x Colors + Repetition planes).
+1.  **Input**: The board state is converted into a **14-plane tensor** (12 piece-placement planes + 2 side-to-move planes).
 2.  **ResNet Evaluator**:
     *   The board is fed into the Neural Network.
     *   **Output 1 (Policy)**: A probability distribution over all legal moves (Intuition).

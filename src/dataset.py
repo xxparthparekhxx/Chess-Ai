@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 def create_uci_labels():
     """
     Generates a dictionary mapping every possible legal move in chess 
-    (in UCI format) to an integer. approx 1968 moves.
+    (in UCI format) to an integer. 4,544 moves.
     """
     labels_array = []
     letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
@@ -37,7 +37,7 @@ def create_uci_labels():
 
 MOVE_TO_INT = create_uci_labels()
 INT_TO_MOVE = {v: k for k, v in MOVE_TO_INT.items()}
-ACTION_SIZE = len(MOVE_TO_INT) # ~1968
+ACTION_SIZE = len(MOVE_TO_INT) # 4544 (64*63 board moves + 2*8*8*4 promotions)
 
 # --- 2. THE INPUT ENCODER ---
 def board_to_tensor(board):
