@@ -40,7 +40,7 @@ def get_ai_move_logic(board):
     # For now, let's use temp=0.5 for first 10 moves, then 0.
     temp = 0.5 if len(board.move_stack) < 10 else 0.0
     
-    best_move_uci, eval_value = mcts.search(board)
+    best_move_uci, eval_value = mcts.search(board, temperature=temp)
     return best_move_uci, eval_value
 
 @app.route('/')

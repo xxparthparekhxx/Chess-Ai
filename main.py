@@ -62,8 +62,8 @@ def main():
             # Simple temperature schedule
             temp = 0.5 if len(board.move_stack) < 10 else 0.0
             
-            # Use MCTS search
-            best_move_uci, eval_value = mcts.search(board)
+            # Use MCTS search (temperature applies for the opening moves)
+            best_move_uci, eval_value = mcts.search(board, temperature=temp)
             
             if best_move_uci:
                 print(f"AI plays: {best_move_uci} (Eval: {eval_value:.2f})")

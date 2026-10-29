@@ -27,7 +27,7 @@ class MCTS:
         self.num_simulations = num_simulations
         self.c_puct = c_puct
 
-    def search(self, board):
+    def search(self, board, temperature=0.0):
         # Create root
         root = Node(prior=0)
         
@@ -66,7 +66,7 @@ class MCTS:
             # No, standard is: Value for White.
             # If search_board.turn is Black, it means White just moved.
             
-        return self.select_best_move(root, board)
+        return self.select_best_move(root, board, temperature=temperature)
 
     def evaluate(self, board):
         tensor = board_to_tensor(board)
@@ -161,18 +161,31 @@ class MCTS:
         for i, action in enumerate(moves):
             node.children[action].prior = 0.75 * node.children[action].prior + 0.25 * noise[i]
 
-    def select_best_move(self, root, board):
-        # Greedily select most visited
-        best_count = -1
-        best_action = None
-        for action, child in root.children.items():
-            if child.visit_count > best_count:
-                best_count = child.visit_count
-                best_action = action
-        
-        if best_action is None:
+    def select_best_move(self, root, board, temperature=0.0):
+        if not root.children:
             return None, 0.0 # Should not happen unless no legal moves
-            
+
+        actions = list(root.children.keys())
+        visit_counts = np.array(
+            [root.children[action].visit_count for action in actions],
+            dtype=np.float64,
+        )
+
+        if temperature <= 0.0:
+            # Greedily select most visited
+            best_action = actions[int(np.argmax(visit_counts))]
+        else:
+            # Sample from visit_count ** (1 / temperature).
+            # Dividing by the max count leaves the distribution unchanged and
+            # avoids overflow when temperature is small.
+            max_count = visit_counts.max()
+            if max_count <= 0:
+                probs = np.full(len(actions), 1.0 / len(actions))
+            else:
+                weights = (visit_counts / max_count) ** (1.0 / temperature)
+                probs = weights / weights.sum()
+            best_action = actions[int(np.random.choice(len(actions), p=probs))]
+
         uci = INT_TO_MOVE[best_action]
         # Return predicted value (Q of best child)
         return uci, -root.children[best_action].value() 
