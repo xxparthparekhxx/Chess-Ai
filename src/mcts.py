@@ -22,10 +22,12 @@ class Node:
         return self.value_sum / self.visit_count
 
 class MCTS:
-    def __init__(self, model, num_simulations=800, c_puct=1.0):
+    def __init__(self, model, num_simulations=800, c_puct=1.0, batch_size=8, virtual_loss=1.0):
         self.model = model
         self.num_simulations = num_simulations
         self.c_puct = c_puct
+        self.batch_size = max(1, batch_size)
+        self.virtual_loss = virtual_loss
 
     def search(self, board, temperature=0.0):
         # Create root
@@ -38,53 +40,87 @@ class MCTS:
         # Add exploration noise to root (dirichlet)
         self.add_dirichlet_noise(root)
 
-        for _ in range(self.num_simulations):
-            node = root
-            search_board = board.copy()
-            path = [node]
-            
-            # 1. Select
-            while node.is_expanded():
-                action, node = self.select_child(node)
-                path.append(node)
-                move = chess.Move.from_uci(INT_TO_MOVE[action])
-                search_board.push(move)
+        remaining = self.num_simulations
+        while remaining > 0:
+            batch_size = min(self.batch_size, remaining)
+            leaves = []
 
-            # 2. Evaluate & Expand
-            value, is_terminal = self.get_game_result(search_board)
-            if not is_terminal:
-                policy, v = self.evaluate(search_board)
-                self.expand(node, search_board, policy)
-                value = v
-            else:
-                # Terminal value is absolute (1 for White win, -1 for Black win)
-                pass
+            # 1. Select a batch of leaves. Virtual loss makes the paths already
+            #    selected in this batch less attractive to the next selection.
+            for _ in range(batch_size):
+                node = root
+                search_board = board.copy()
+                path = [node]
 
-            # 3. Backpropagate
-            self.backpropagate(path, value, search_board.turn) 
-            # Note: value is "Value of the board state for the current player"?
-            # No, standard is: Value for White.
-            # If search_board.turn is Black, it means White just moved.
-            
+                while node.is_expanded():
+                    action, node = self.select_child(node)
+                    path.append(node)
+                    move = chess.Move.from_uci(INT_TO_MOVE[action])
+                    search_board.push(move)
+
+                self.apply_virtual_loss(path)
+                leaves.append((node, path, search_board))
+
+            # 2. Evaluate all non-terminal leaves in a single network call.
+            pending = []
+            boards_to_evaluate = []
+            for node, path, search_board in leaves:
+                value, is_terminal = self.get_game_result(search_board)
+                if is_terminal:
+                    pending.append((node, path, search_board, value))
+                else:
+                    pending.append((node, path, search_board, None))
+                    boards_to_evaluate.append(search_board)
+
+            policies, values = self.evaluate_batch(boards_to_evaluate)
+            evaluated = iter(zip(policies, values))
+
+            # 3. Expand and backpropagate. Virtual loss is removed first so the
+            #    real visit counts reflect exactly one simulation per leaf.
+            for node, path, search_board, terminal_value in pending:
+                if terminal_value is None:
+                    policy, value = next(evaluated)
+                    # A forced line can select the same leaf more than once in
+                    # one batch; only the first visit should expand it.
+                    if not node.is_expanded():
+                        self.expand(node, search_board, policy)
+                else:
+                    value = terminal_value
+
+                self.undo_virtual_loss(path)
+                self.backpropagate(path, value, search_board.turn)
+
+            remaining -= batch_size
+
         return self.select_best_move(root, board, temperature=temperature)
 
     def evaluate(self, board):
-        tensor = board_to_tensor(board)
-        tensor = torch.tensor(tensor, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+        policies, values = self.evaluate_batch([board])
+        return policies[0], values[0]
+
+    def evaluate_batch(self, boards):
+        if not boards:
+            return [], []
+
+        tensors = np.stack([board_to_tensor(b) for b in boards])
+        tensor = torch.from_numpy(tensors).to(DEVICE)
         with torch.no_grad():
             policy_logits, value = self.model(tensor)
-        policy = F.softmax(policy_logits, dim=1).squeeze(0).cpu().numpy()
-        
+
+        policies = F.softmax(policy_logits, dim=1).cpu().numpy()
+        values = value.view(-1).cpu().numpy()
+
         # Helper: Relative Value
         # Model predicts +1 (White Win), -1 (Black Win)
         # We need to return value from perspective of current player
-        # If Black to play is evaluated as +0.9 (White has advantage), 
+        # If Black to play is evaluated as +0.9 (White has advantage),
         # relative value for Black is -0.9.
-        val = value.item()
-        if board.turn == chess.BLACK:
-            val = -val
-            
-        return policy, val
+        relative_values = [
+            float(v) if board.turn == chess.WHITE else -float(v)
+            for v, board in zip(values, boards)
+        ]
+
+        return policies, relative_values
 
     def select_child(self, node):
         best_score = -float('inf')
@@ -108,6 +144,20 @@ class MCTS:
                 best_action = action
                 best_child = child
         return best_action, best_child
+
+    def apply_virtual_loss(self, path):
+        # Node values are stored from the perspective of the player to move at
+        # that node, so adding to a child's value_sum lowers its Q from the
+        # parent's perspective. Applying it below the root penalizes every edge
+        # on the path while the batch is being collected.
+        for node in path[1:]:
+            node.visit_count += 1
+            node.value_sum += self.virtual_loss
+
+    def undo_virtual_loss(self, path):
+        for node in path[1:]:
+            node.visit_count -= 1
+            node.value_sum -= self.virtual_loss
 
     def expand(self, node, board, policy):
         legal_moves = list(board.legal_moves)
