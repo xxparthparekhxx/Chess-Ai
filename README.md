@@ -65,7 +65,20 @@ For a lightweight terminal experience.
 python main.py
 ```
 
-### 3. Train the Model
+### 3. Play in the browser (WebGPU, no server)
+`webgpu/` is a static web page that runs this same network and search on the visitor's own GPU through
+WebGPU, with a WebAssembly (CPU) fallback. Nothing runs on a server except serving files. The Python code
+is not changed; two scripts in `scripts/` export the network to ONNX and dump test fixtures from the Python
+engine, and the TypeScript port is tested against those fixtures.
+```bash
+.venv/bin/python scripts/export_onnx.py     # writes webgpu/model/chess_net.onnx (git-ignored)
+cd webgpu && npm install && npm run dev
+```
+Search runs for a time budget (default 2 s per move, adjustable) instead of a fixed 800 simulations. See
+[`webgpu/README.md`](webgpu/README.md) for what runs where, build/test/deploy commands, browser support, parity
+results with the Python engine, and known limits. The page has not been measured in a browser yet.
+
+### 4. Train the Model
 To train the AI on your own PGN datasets:
 1.  Place `.pgn` files in `data/raw/`.
 2.  Run preprocessing:
@@ -113,6 +126,8 @@ Sigma-Go/
 │   ├── static/         # CSS, JS, and Assets
 │   ├── templates/      # HTML Files
 │   └── app.py          # Flask Backend
+├── scripts/            # ONNX export and test-fixture generation (for webgpu/)
+├── webgpu/             # Browser version: Vite + TypeScript, WebGPU / WASM
 └── main.py             # CLI Entry Point
 ```
 
