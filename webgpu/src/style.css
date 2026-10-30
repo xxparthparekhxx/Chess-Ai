@@ -56,19 +56,6 @@ h1 {
     margin-bottom: 10px;
 }
 
-.badge {
-    font-size: 0.9rem;
-    background: rgba(56, 189, 248, 0.2);
-    color: var(--accent);
-    padding: 4px 10px;
-    border-radius: 20px;
-    border: 1px solid rgba(56, 189, 248, 0.5);
-    vertical-align: middle;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    -webkit-text-fill-color: var(--accent);
-}
-
 p {
     color: var(--text-secondary);
     font-weight: 300;
