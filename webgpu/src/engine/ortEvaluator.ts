@@ -50,3 +50,42 @@ export class OrtEvaluator implements Evaluator {
     return { policy: policy.subarray(0, n * ACTION_SIZE), value: value.subarray(0, n) };
   }
 }
+
+/**
+ * Evaluator for runtimes that need one session per input shape (onnxruntime-web's WebGL backend cannot take a
+ * symbolic batch axis, so each session is a copy of the network with the batch fixed). A batch of n positions
+ * runs on the smallest session that holds it, zero-padded; a batch larger than every session is split.
+ */
+export class MultiSessionEvaluator implements Evaluator {
+  private readonly sizes: number[];
+
+  constructor(
+    private readonly ort: OrtModuleLike,
+    private readonly sessions: ReadonlyMap<number, OrtSessionLike>,
+  ) {
+    this.sizes = [...sessions.keys()].sort((a, b) => a - b);
+    if (this.sizes.length === 0) throw new Error('MultiSessionEvaluator needs at least one session');
+  }
+
+  async evaluate(planes: Float32Array, n: number): Promise<EvalOutput> {
+    const largest = this.sizes[this.sizes.length - 1]!;
+    if (n <= largest) return this.run(planes, 0, n);
+    const policy = new Float32Array(n * ACTION_SIZE);
+    const value = new Float32Array(n);
+    for (let at = 0; at < n; at += largest) {
+      const count = Math.min(largest, n - at);
+      const out = await this.run(planes, at, count);
+      policy.set(out.policy, at * ACTION_SIZE);
+      value.set(out.value, at);
+    }
+    return { policy, value };
+  }
+
+  private async run(planes: Float32Array, from: number, count: number): Promise<EvalOutput> {
+    const size = this.sizes.find((s) => s >= count)!;
+    const input = new Float32Array(size * PLANE_FLOATS);
+    input.set(planes.subarray(from * PLANE_FLOATS, (from + count) * PLANE_FLOATS));
+    const out = await this.sessions.get(size)!.run({ planes: new this.ort.Tensor('float32', input, [size, 14, 8, 8]) });
+    return { policy: (out.policy!.data as Float32Array).subarray(0, count * ACTION_SIZE), value: (out.value!.data as Float32Array).subarray(0, count) };
+  }
+}

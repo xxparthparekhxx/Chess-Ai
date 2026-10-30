@@ -1,12 +1,12 @@
 // The engine: loads the network, runs the search. Nothing here touches the DOM.
 
 import { Mcts } from '../engine/mcts';
-import { OrtEvaluator } from '../engine/ortEvaluator';
+import { MultiSessionEvaluator, OrtEvaluator } from '../engine/ortEvaluator';
 import { PLANE_FLOATS, encodeFen } from '../engine/position';
 import type { EvalOutput, Evaluator } from '../engine/types';
-import type { CalibrationRow, FromWorker, InitRequest, ReadyInfo, SearchRequest, ToWorker } from '../messages';
+import type { BackendName, CalibrationRow, EvaluateRequest, FromWorker, InitRequest, SearchRequest, ToWorker } from '../messages';
 import { clearModelCache, loadModel } from './modelLoader';
-import { createSession } from './ortBackend';
+import { createSession, type CreatedSession } from './ortBackend';
 
 const ctx = self as unknown as {
   postMessage(message: FromWorker): void;
@@ -27,7 +27,7 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 class YieldingEvaluator implements Evaluator {
-  constructor(private readonly inner: OrtEvaluator) {}
+  constructor(private readonly inner: Evaluator) {}
   async evaluate(planes: Float32Array, n: number): Promise<EvalOutput> {
     const out = await this.inner.evaluate(planes, n);
     await yieldToEventLoop();
@@ -36,6 +36,7 @@ class YieldingEvaluator implements Evaluator {
 }
 
 let mcts: Mcts | null = null;
+let evaluator: Evaluator | null = null;
 let autoBatch = 8;
 let running: { id: number; signal: { aborted: boolean } } | null = null;
 const abortedEarly = new Set<number>();
@@ -53,12 +54,13 @@ function median(xs: number[]): number {
  * per network call. WebGPU starts from 8 (the Python engine's batch); on the CPU a batch gives no
  * speed-up, so it starts from 1.
  */
-async function calibrate(ev: OrtEvaluator, backend: ReadyInfo['backend']): Promise<{ rows: CalibrationRow[]; batch: number }> {
+async function calibrate(ev: Evaluator, backend: BackendName): Promise<{ rows: CalibrationRow[]; batch: number }> {
   const start = encodeFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
-  const gpu = backend === 'webgpu';
-  const sizes = gpu ? [1, 8, 16, 32] : [1, 4, 8];
-  const candidates = gpu ? [8, 16, 32] : [1, 4, 8];
-  const timedRuns = gpu ? 3 : 1;
+  const gpu = backend !== 'wasm';
+  // WebGL only has a batch-1 session (its Conv is wrong for larger batches), so batching gives it nothing
+  const sizes = backend === 'webgpu' ? [1, 8, 16, 32] : backend === 'webgl' ? [1] : [1, 4, 8];
+  const candidates = backend === 'webgpu' ? [8, 16, 32] : backend === 'webgl' ? [1] : [1, 4, 8];
+  const timedRuns = backend === 'webgpu' ? 3 : backend === 'webgl' ? 2 : 1;
   const rows: CalibrationRow[] = [];
   for (const batch of sizes) {
     const planes = new Float32Array(batch * PLANE_FLOATS);
@@ -88,6 +90,28 @@ async function calibrate(ev: OrtEvaluator, backend: ReadyInfo['backend']): Promi
   return { rows, batch: chosen };
 }
 
+/** Below this a GPU backend loses to the CPU backend (about 25 positions/s on 4 threads), so automatic mode skips it. */
+const MIN_GPU_POSITIONS_PER_SECOND = 20;
+
+/** Builds the evaluator for a created session, warms it up and times it. */
+async function prepare(created: CreatedSession): Promise<{ rows: CalibrationRow[]; batch: number; buckets: number[] | null; ev: Evaluator }> {
+  // On WebGPU every new input shape can trigger a shader compile, so batches are padded up to a few
+  // fixed sizes that get warmed up below. WebGL has one session per fixed size. On the CPU cost is
+  // proportional to batch size, so no padding.
+  const buckets = created.backend === 'webgpu' ? [1, 8, 16, 32] : created.backend === 'webgl' ? [...created.sessions.keys()] : null;
+  const ev: Evaluator =
+    created.backend === 'webgl' ? new MultiSessionEvaluator(created.ort, created.sessions) : new OrtEvaluator(created.ort, created.session, buckets);
+  evaluator = ev;
+  const warm = {
+    webgpu: 'Compiling WebGPU shaders and timing batch sizes',
+    webgl: 'Compiling WebGL shaders and timing the network',
+    wasm: `Warming up the CPU runtime (${created.threads} thread${created.threads === 1 ? '' : 's'})`,
+  }[created.backend];
+  post({ type: 'progress', phase: 'warmup', message: warm, backend: created.backend });
+  const { rows, batch } = await calibrate(ev, created.backend);
+  return { rows, batch, buckets, ev };
+}
+
 async function init(req: InitRequest): Promise<void> {
   const t0 = performance.now();
   try {
@@ -102,22 +126,32 @@ async function init(req: InitRequest): Promise<void> {
         phase: fromCache ? 'cache' : 'download',
         loaded,
         total,
-        message: fromCache ? 'Loaded the network from this browser\'s cache' : 'Downloading the network',
+        message: fromCache ? 'Loaded the network from this browser\'s cache, no download needed' : 'Downloading the network',
       });
     });
 
     post({ type: 'progress', phase: 'runtime', message: 'Starting the inference runtime' });
-    const created = await createSession(model.bytes, req.backend, req.ortExternalBase, (message) =>
-      post({ type: 'progress', phase: 'compile', message }),
-    );
+    const onStep = (message: string) => post({ type: 'progress', phase: 'compile', message });
+    let created = await createSession(model.bytes, req.backend, req.ortExternalBase, onStep, req.threads ?? 0);
+    let prepared = await prepare(created);
 
-    // On the GPU every new input shape can trigger a shader compile, so batches are padded up to a few
-    // fixed sizes that get warmed up below. On the CPU cost is proportional to batch size, so no padding.
-    const evaluator = new OrtEvaluator(created.ort, created.session, created.backend === 'webgpu' ? [1, 8, 16, 32] : null);
-    post({ type: 'progress', phase: 'warmup', message: created.backend === 'webgpu' ? 'Compiling GPU shaders and timing batch sizes' : 'Warming up the CPU runtime' });
-    const { rows, batch } = await calibrate(evaluator, created.backend);
+    // A GPU that is slower than the CPU (a software renderer, a small integrated GPU) is not worth using.
+    // Only when the backend was left on automatic; ?backend=webgl / webgpu stays what was asked for.
+    const gpuRate = Math.max(...prepared.rows.map((r) => r.positionsPerSecond));
+    if (req.backend === 'auto' && created.backend !== 'wasm' && gpuRate < MIN_GPU_POSITIONS_PER_SECOND) {
+      const slow = created;
+      const why = `${slow.backend === 'webgpu' ? 'WebGPU' : 'WebGL'} ran at only ${gpuRate.toFixed(0)} positions/s here (a software or small GPU), slower than the CPU, so the CPU is used.`;
+      post({ type: 'progress', phase: 'runtime', message: 'That GPU is slow, switching to the CPU' });
+      for (const old of new Set([slow.session, ...slow.sessions.values()])) await old.release().catch(() => undefined);
+      created = await createSession(model.bytes, 'wasm', req.ortExternalBase, onStep, req.threads ?? 0);
+      created.webgpuNote = slow.backend === 'webgpu' ? why : slow.webgpuNote;
+      created.webgpuProblem = slow.backend === 'webgpu' ? 'slow-gpu' : slow.webgpuProblem;
+      created.webglNote = slow.backend === 'webgl' ? why : slow.webglNote;
+      prepared = await prepare(created);
+    }
+    const { rows, batch, buckets, ev } = prepared;
     autoBatch = batch;
-    mcts = new Mcts(new YieldingEvaluator(evaluator));
+    mcts = new Mcts(new YieldingEvaluator(ev));
 
     post({
       type: 'ready',
@@ -127,6 +161,9 @@ async function init(req: InitRequest): Promise<void> {
         threads: created.threads,
         crossOriginIsolated: typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated,
         webgpuNote: created.webgpuNote,
+        webgpuProblem: created.webgpuProblem,
+        webglNote: created.webglNote,
+        buckets,
         modelBytes: model.bytes.byteLength,
         fromCache: model.fromCache,
         loadMs: performance.now() - t0,
@@ -164,6 +201,22 @@ async function search(req: SearchRequest): Promise<void> {
   }
 }
 
+async function evaluate(req: EvaluateRequest): Promise<void> {
+  if (!evaluator) {
+    post({ type: 'evaluate-error', id: req.id, message: 'The engine is not ready yet.' });
+    return;
+  }
+  try {
+    const t = performance.now();
+    const out = await evaluator.evaluate(req.planes, req.n);
+    const ms = performance.now() - t;
+    // copy: the evaluator may hand out views of its own buffers
+    post({ type: 'evaluate-result', id: req.id, policy: out.policy.slice(), value: out.value.slice(), ms });
+  } catch (err) {
+    post({ type: 'evaluate-error', id: req.id, message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
@@ -173,6 +226,9 @@ ctx.onmessage = (e) => {
     case 'search':
       // one search at a time; a new request waits for the previous one to finish
       queue = queue.then(() => search(msg));
+      break;
+    case 'evaluate':
+      queue = queue.then(() => evaluate(msg));
       break;
     case 'abort':
       if (running && running.id === msg.id) running.signal.aborted = true;

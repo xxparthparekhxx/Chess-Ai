@@ -52,6 +52,8 @@ export class EngineClient {
     modelVersion: string;
     backend: BackendPreference;
     ortExternalBase: string;
+    /** CPU threads; 0 = automatic */
+    threads?: number;
     onProgress: (p: LoadProgress) => void;
   }): Promise<ReadyInfo> {
     this.onLoad = options.onProgress;
@@ -64,6 +66,7 @@ export class EngineClient {
         modelVersion: options.modelVersion,
         backend: options.backend,
         ortExternalBase: options.ortExternalBase,
+        threads: options.threads,
       });
     });
   }

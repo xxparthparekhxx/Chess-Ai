@@ -21,7 +21,7 @@ vi.mock('../src/worker/ortBackend', async () => {
   return {
     createSession: async () => {
       const { ort, session } = await make();
-      return { ort, session, backend: 'wasm', runtime: 'wasm', threads: 1, webgpuNote: 'test double' };
+      return { ort, session, sessions: new Map(), backend: 'wasm', runtime: 'wasm', threads: 1, webgpuNote: 'test double', webgpuProblem: 'no-api', webglNote: null };
     },
   };
 });
