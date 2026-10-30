@@ -2,3 +2,8 @@
 data
 __pycache__
 *.pyc
+
+# exported networks (served from Hugging Face in production)
+*.onnx
+webgpu/node_modules/
+webgpu/dist/

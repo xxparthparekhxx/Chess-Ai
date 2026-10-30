@@ -1,0 +1,3 @@
+# Needed by scripts/export_onnx.py (in addition to torch, numpy and python-chess)
+onnx
+onnxruntime
