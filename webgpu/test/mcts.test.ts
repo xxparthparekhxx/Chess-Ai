@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Mcts } from '../src/engine/mcts';
 import { OrtEvaluator } from '../src/engine/ortEvaluator';
 import { loadFixtures } from './helpers/fixtures';
-import { createNodeSession, hasModel, writeOut } from './helpers/ortNode';
+import { createNodeSession, FP16_MODEL_PATH, hasFp16Model, hasModel, writeOut } from './helpers/ortNode';
 
 const fx = loadFixtures();
 
@@ -90,4 +90,23 @@ describe.skipIf(!hasModel)('TS MCTS vs Python MCTS (noise off, temperature 0, ba
       expect(summary.agreement).toBeGreaterThanOrEqual(0.8);
     }, 600_000);
   }
+});
+
+describe.skipIf(!hasModel || !hasFp16Model)('fp16-weights variant: TS MCTS vs Python MCTS (informational)', () => {
+  it('reports how often it still picks the same move at 200 simulations', async () => {
+    const { ort, session } = await createNodeSession(FP16_MODEL_PATH);
+    const mcts = new Mcts(new OrtEvaluator(ort, session));
+    const run = fx.mcts_runs.find((r) => r.simulations === 200)!;
+    let same = 0;
+    const differs: string[] = [];
+    for (const r of run.results) {
+      const res = await mcts.search(r.fen, { maxSimulations: 200, batchSize: 8, dirichlet: false, temperature: 0 });
+      if (res.move === r.move) same++;
+      else differs.push(`${fx.positions[r.index]!.name}: Python ${r.move}, fp16 ${res.move}`);
+    }
+    const out = { simulations: 200, positions: run.results.length, sameMove: same, agreement: same / run.results.length, differs };
+    console.log('[parity] fp16-weights file, 200 sims:', out);
+    writeOut('mcts_parity_fp16w_200.json', out);
+    expect(out.agreement).toBeGreaterThan(0.7);
+  }, 300_000);
 });
