@@ -1,0 +1,16 @@
+// Cloudflare Workers, static assets only: no Worker script, no server-side code.
+// Not deployed from here. See "Deploying" in README.md.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sigma-go-chess",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    // `npm run build` writes the site here. Headers come from dist/_headers (copied from public/_headers).
+    "directory": "./dist"
+  },
+  // Serve the site at chess.parthparekhdev.com. The parthparekhdev.com zone must be on the same Cloudflare
+  // account; wrangler creates the DNS record and certificate for a custom domain.
+  "routes": [
+    { "pattern": "chess.parthparekhdev.com", "custom_domain": true }
+  ]
+}
