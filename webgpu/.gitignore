@@ -1,0 +1,8 @@
+node_modules/
+dist/
+# the exported network lives here during development and is served by the dev
+# server; it is not part of the site (production fetches it from Hugging Face)
+model/
+test/out/
+.env.local
+*.local
