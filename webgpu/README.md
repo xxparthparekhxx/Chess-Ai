@@ -74,7 +74,7 @@ a "Move now" button that stops the search and plays the best move so far, a time
 (0.5 to 10 s, default 2 s), a batch-size setting, and an Engine panel showing the backend, simulations done,
 simulations per second, the line the search currently prefers, and start-up timing.
 
-The evaluation shown is from the AI's side (+1 means the AI is winning), like the original page. It is
+The evaluation shown is from the engine's side (+1 means the engine is winning), like the original page. It is
 the search's value for the move it played, not a centipawn score.
 
 ## How the search differs from the Python one
@@ -243,8 +243,8 @@ Not done by me. Things to check, in a Chromium browser with WebGPU first, then w
 2. First load shows download progress; reload: the network should come from cache ("from cache" in Details, no 47 MB transfer in the Network tab).
 3. DevTools console: `crossOriginIsolated` should be `true`. If not, the CPU backend runs on one thread.
 4. Play a few moves: drag and drop, click-click, promotion picker (move a pawn to the last rank), castling, en passant, undo, flip, play as Black
-   (the AI moves first), Hint (arrow appears), "Move now" while thinking.
-5. While thinking, the status shows "AI is Thinking", the Engine panel shows simulations, sims/s and a line. Read sims/s and the start-up
+   (the engine moves first), Hint (arrow appears), "Move now" while thinking.
+5. While thinking, the status line shows the thinking message, the Engine panel shows simulations, sims/s and a line. Read sims/s and the start-up
    batch timings from Details; that is the browser speed number nobody has yet.
 6. Change "Time per move" to 0.5 s and 10 s and confirm the move arrives about when expected.
 7. `?backend=wasm` should force the CPU backend. Try a browser or flag combination without WebGPU to see the fallback note.

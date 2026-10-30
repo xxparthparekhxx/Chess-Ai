@@ -309,7 +309,7 @@ export function startApp(): void {
   }
 
   async function requestAiMove(): Promise<void> {
-    if (game.isGameOver() || game.turn() === human) return;
+    if (busy || game.isGameOver() || game.turn() === human) return;
     if (engineFailed) {
       refresh();
       return;
