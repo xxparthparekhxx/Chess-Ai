@@ -32,8 +32,12 @@ export interface BoardHandlers {
   canPick(square: string): boolean;
   /** squares the piece on `square` can move to (empty if none) */
   destinations(square: string): string[];
+  /** the subset of those squares where the move captures (en passant included) */
+  captures?(square: string): string[];
   /** the user dropped / clicked a piece onto a legal destination */
   onMove(from: string, to: string): void;
+  /** the user pressed on the board while it is locked (the engine's turn, or the game is over) */
+  onBlocked?(): void;
 }
 
 export class BoardView {
@@ -46,6 +50,7 @@ export class BoardView {
   private locked = false;
   private selected: string | null = null;
   private dests: string[] = [];
+  private captureDests: string[] = [];
   private lastMove: [string, string] | null = null;
   private checkSquare: string | null = null;
   private hint: [string, string] | null = null;
@@ -164,7 +169,7 @@ export class BoardView {
       el.classList.toggle('hint', !!this.hint && (this.hint[0] === name || this.hint[1] === name));
       const isDest = this.dests.includes(name);
       el.classList.toggle('move-hint', isDest);
-      el.classList.toggle('capture', isDest && this.pieces.has(name));
+      el.classList.toggle('capture', isDest && (this.pieces.has(name) || this.captureDests.includes(name)));
     }
   }
 
@@ -212,14 +217,20 @@ export class BoardView {
 
   private select(square: string): void {
     this.selected = square;
-    this.dests = this.h.destinations(square);
+    this.setDestinations(square);
     this.paintHighlights();
   }
 
   private clearSelection(): void {
     this.selected = null;
     this.dests = [];
+    this.captureDests = [];
     this.paintHighlights();
+  }
+
+  private setDestinations(square: string | null): void {
+    this.dests = square ? this.h.destinations(square) : [];
+    this.captureDests = square && this.h.captures ? this.h.captures(square) : [];
   }
 
   private squareFromEvent(e: Event): string | null {
@@ -236,16 +247,16 @@ export class BoardView {
     if (e.pointerType !== 'mouse' || this.locked || this.drag || this.selected) return;
     const sq = this.squareFromEvent(e);
     if (!sq) return;
-    if (over && this.pieces.has(sq) && this.h.canPick(sq)) {
-      this.dests = this.h.destinations(sq);
-    } else {
-      this.dests = [];
-    }
+    this.setDestinations(over && this.pieces.has(sq) && this.h.canPick(sq) ? sq : null);
     this.paintHighlights();
   }
 
   private onPointerDown(e: PointerEvent): void {
-    if (this.locked || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (this.locked) {
+      this.h.onBlocked?.();
+      return;
+    }
     const sq = this.squareFromEvent(e);
     if (!sq) return;
 
@@ -259,6 +270,9 @@ export class BoardView {
 
     if (this.pieces.has(sq) && this.h.canPick(sq)) {
       this.select(sq);
+      // A finger can scroll the page from the board, so touch only taps (tap the piece, then the square);
+      // dragging is for mouse and pen.
+      if (e.pointerType === 'touch') return;
       this.drag = { from: sq, ghost: null, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId };
       window.addEventListener('pointermove', this.onPointerMove);
       window.addEventListener('pointerup', this.onPointerUp);

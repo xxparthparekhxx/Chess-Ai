@@ -26,10 +26,9 @@ export const config = {
       ? env.VITE_ORT_EXTERNAL_BASE
       : `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`,
 
-  /** Thinking time per move, seconds. */
+  /** Thinking time per move, seconds: the choices in Settings, and the default. */
+  thinkOptions: [1, 2, 5, 10],
   defaultThinkSeconds: 2,
-  minThinkSeconds: 0.5,
-  maxThinkSeconds: 10,
 
   /** Python's MCTS uses 8 leaves per network call. */
   defaultBatchSize: 8,

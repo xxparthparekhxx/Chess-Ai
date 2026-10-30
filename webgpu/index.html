@@ -3,115 +3,171 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Sigma-Go chess engine running in your browser: a ResNet with Monte Carlo tree search on WebGPU, with a WebAssembly fallback.">
+    <meta name="description" content="Sigma-Go chess engine running in your browser: a ResNet with Monte Carlo tree search on WebGPU, or WebGL where WebGPU isn't available, with a CPU fallback.">
     <title>Sigma-Go: play the chess engine in your browser</title>
 </head>
 <body>
 
 <div class="container">
+    <nav class="site-nav" aria-label="Site links">
+        <a class="back" href="https://www.parthparekhdev.com">&larr; Parth Parekh</a>
+        <ul class="nav-links">
+            <li><a href="https://www.parthparekhdev.com/work/sigma-go-chess">How it works</a></li>
+            <li><a href="https://github.com/xxparthparekhxx/Chess-Ai" target="_blank" rel="noopener">GitHub<span class="sr-only"> (opens in a new tab)</span></a></li>
+            <li><a href="https://huggingface.co/xxparthparekhxx/sigma-go" target="_blank" rel="noopener">Hugging Face<span class="sr-only"> (opens in a new tab)</span></a></li>
+        </ul>
+    </nav>
+
     <header>
         <h1>ChessAI <span class="badge">PRO</span></h1>
         <p>Powered by ResNet + AlphaZero Logic, running in your browser</p>
-        <div id="engine-chip" class="chip loading" role="status" aria-live="polite">
-            <span class="dot"></span><span id="engine-chip-text">Starting engine</span>
+        <div class="chip-row">
+            <div id="engine-chip" class="chip loading" role="status" aria-live="polite">
+                <span class="dot"></span><span id="engine-chip-text">Starting engine</span>
+            </div>
+            <button id="why-btn" class="linklike" type="button" hidden>Why not WebGPU?</button>
         </div>
     </header>
 
-    <div class="game-area">
+    <main class="game-area">
         <div class="board-container">
-            <div id="board" aria-label="Chess board"></div>
+            <div id="board" aria-label="Chess board. Select a piece, then a highlighted square to move it."></div>
 
             <div id="loader" class="loader">
                 <div class="loader-card">
                     <h3 id="loader-title">Loading the engine</h3>
-                    <div class="bar-container"><div id="loader-bar" class="bar" style="width: 0%"></div></div>
-                    <div id="loader-text" class="loader-text">Starting</div>
-                    <button id="loader-retry" class="btn secondary" hidden>Try again</button>
+                    <div class="bar-container" role="progressbar" aria-labelledby="loader-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="loader-track"><div id="loader-bar" class="bar" style="width: 0%"></div></div>
+                    <div id="loader-text" class="loader-text" aria-live="polite">Starting</div>
+                    <button id="loader-retry" class="btn secondary" type="button" hidden>Try again</button>
                 </div>
             </div>
 
             <div id="promotion" class="promotion" hidden></div>
+
+            <div id="gameover" class="gameover" role="alertdialog" aria-labelledby="gameover-title" aria-describedby="gameover-reason" hidden>
+                <div class="gameover-card">
+                    <h3 id="gameover-title">Game over</h3>
+                    <p id="gameover-reason"></p>
+                    <div class="btn-group">
+                        <button id="gameover-new" class="btn primary" type="button">New game</button>
+                        <button id="gameover-close" class="btn secondary" type="button">View board</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="panel">
-            <div class="status-box">
-                <h3>Game Status</h3>
-                <div id="status">White to move</div>
+            <section class="status-box" aria-labelledby="h-status">
+                <h3 id="h-status">Game Status</h3>
+                <div id="status" role="status" aria-live="polite">White to move</div>
+                <div class="think" aria-label="Engine thinking">
+                    <div class="bar-container thin" id="think-track" role="progressbar" aria-label="Thinking time used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="think-bar" class="bar"></div></div>
+                    <div class="think-meta"><span id="think-time">&nbsp;</span><span id="think-sims">&nbsp;</span></div>
+                    <div id="stat-line" class="line-text"></div>
+                </div>
+            </section>
+
+            <div class="controls">
+                <div class="btn-group">
+                    <button id="undoBtn" class="btn secondary" type="button">Undo</button>
+                    <button id="hintBtn" class="btn secondary" type="button">Hint</button>
+                    <button id="moveNowBtn" class="btn secondary" type="button" disabled>Move now</button>
+                </div>
+                <div class="btn-group">
+                    <button id="newGameBtn" class="btn primary" type="button">New game</button>
+                </div>
             </div>
 
-            <div class="eval-box">
-                <h3>AI Evaluation</h3>
+            <section class="eval-box" aria-labelledby="h-eval">
+                <h3 id="h-eval">AI Evaluation</h3>
                 <div id="evaluation">0.0</div>
                 <div class="bar-container">
                     <div id="eval-bar" class="bar"></div>
                 </div>
                 <div class="hint-text">From the AI's side: +1 means the AI is winning.</div>
-            </div>
+            </section>
 
-            <div class="engine-box">
-                <h3>Engine</h3>
+            <section class="history-box" aria-labelledby="h-moves">
+                <h3 id="h-moves">Moves</h3>
+                <ol id="moves" class="moves" tabindex="0" aria-label="Move list"></ol>
+                <div id="moves-empty" class="hint-text">No moves yet.</div>
+                <details class="type-move">
+                    <summary>Type a move</summary>
+                    <form id="move-form" autocomplete="off">
+                        <label for="move-input">Move, such as e4, Nf3 or e2e4</label>
+                        <div class="btn-group">
+                            <input id="move-input" type="text" inputmode="text" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+                            <button class="btn secondary small" type="submit">Play</button>
+                        </div>
+                        <div id="move-error" class="hint-text" role="alert"></div>
+                    </form>
+                </details>
+            </section>
+
+            <section class="settings-box" aria-labelledby="h-settings">
+                <h3 id="h-settings">Settings</h3>
+                <div class="setting" role="group" aria-labelledby="set-time">
+                    <span id="set-time">Time per move</span>
+                    <div class="seg" id="time-seg">
+                        <button type="button" class="seg-btn" data-seconds="1">1 s</button>
+                        <button type="button" class="seg-btn" data-seconds="2">2 s</button>
+                        <button type="button" class="seg-btn" data-seconds="5">5 s</button>
+                        <button type="button" class="seg-btn" data-seconds="10">10 s</button>
+                    </div>
+                </div>
+                <div class="setting" role="group" aria-labelledby="set-side">
+                    <span id="set-side">Play as <span class="hint-inline">(starts a new game)</span></span>
+                    <div class="seg" id="side-seg">
+                        <button type="button" class="seg-btn" data-side="w" id="playWhiteBtn">White</button>
+                        <button type="button" class="seg-btn" data-side="b" id="playBlackBtn">Black</button>
+                    </div>
+                </div>
+                <div class="setting">
+                    <span id="set-board">Board</span>
+                    <button id="flipBtn" class="btn secondary" type="button" aria-describedby="set-board">Flip board</button>
+                </div>
+            </section>
+
+            <section class="engine-box" aria-labelledby="h-engine">
+                <h3 id="h-engine">Engine</h3>
                 <dl class="stats">
                     <dt>Backend</dt><dd id="stat-backend">-</dd>
+                    <dt>Network</dt><dd id="stat-model">-</dd>
                     <dt>Simulations</dt><dd id="stat-sims">-</dd>
                     <dt>Speed</dt><dd id="stat-speed">-</dd>
                     <dt>Batch size</dt><dd id="stat-batch">-</dd>
                 </dl>
-                <div class="bar-container thin"><div id="think-bar" class="bar"></div></div>
-                <div id="stat-line" class="line-text"></div>
-                <details class="engine-details">
+                <details id="engine-details" class="engine-details">
                     <summary>Details</summary>
                     <dl class="stats">
                         <dt>Runtime</dt><dd id="stat-runtime">-</dd>
-                        <dt>Network</dt><dd id="stat-model">-</dd>
+                        <dt>GPU</dt><dd id="stat-gpu">-</dd>
+                        <dt>CPU threads</dt><dd id="stat-threads">-</dd>
                         <dt>Start-up timing</dt><dd id="stat-calibration">-</dd>
                     </dl>
+                    <div id="webgpu-help" class="advice" hidden>
+                        <h4>WebGPU is not in use</h4>
+                        <p id="webgpu-reason"></p>
+                        <ol id="webgpu-steps"></ol>
+                    </div>
                     <div id="stat-note" class="hint-text"></div>
-                    <button id="clearCacheBtn" class="btn secondary small">Clear cached network</button>
+                    <label class="setting" for="batch-select">
+                        <span>Leaves per network call</span>
+                        <select id="batch-select">
+                            <option value="0">Auto (timed at start-up)</option>
+                            <option value="8">8 (as in the Python engine)</option>
+                            <option value="16">16</option>
+                            <option value="32">32</option>
+                        </select>
+                    </label>
+                    <button id="clearCacheBtn" class="btn secondary small" type="button">Clear cached network</button>
                 </details>
-            </div>
-
-            <div class="history-box">
-                <h3>PGN History</h3>
-                <div id="pgn"></div>
-            </div>
-
-            <div class="controls">
-                <div class="btn-group">
-                    <button id="playWhiteBtn" class="btn primary">Play as White</button>
-                    <button id="playBlackBtn" class="btn primary">Play as Black</button>
-                </div>
-                <div class="btn-group">
-                    <button id="undoBtn" class="btn secondary">Undo</button>
-                    <button id="hintBtn" class="btn secondary">Hint</button>
-                    <button id="flipBtn" class="btn secondary">Flip Board</button>
-                </div>
-                <div class="btn-group">
-                    <button id="moveNowBtn" class="btn secondary" disabled>Move now</button>
-                </div>
-            </div>
-
-            <div class="settings-box">
-                <h3>Thinking</h3>
-                <label class="setting">
-                    <span>Time per move: <b id="think-value">2.0 s</b></span>
-                    <input id="think-range" type="range" min="0.5" max="10" step="0.5" value="2">
-                </label>
-                <label class="setting">
-                    <span>Leaves per network call</span>
-                    <select id="batch-select">
-                        <option value="0">Auto (timed at start-up)</option>
-                        <option value="8">8 (as in the Python engine)</option>
-                        <option value="16">16</option>
-                        <option value="32">32</option>
-                    </select>
-                </label>
-            </div>
+            </section>
         </div>
-    </div>
+    </main>
 
     <footer>
-        <p>The network runs on your device. Nothing is sent to a server except the one-time download of the network file.
-           <a href="https://github.com/xxparthparekhxx/Chess-Ai" target="_blank" rel="noopener">Source</a></p>
+        <p>The network runs on your device. Nothing is sent to a server except the one-time download of the network file.</p>
     </footer>
 </div>
 
