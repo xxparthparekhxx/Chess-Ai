@@ -60,7 +60,7 @@ Build-time variables (see `.env.example`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `VITE_MODEL_URL` | dev: `/model/chess_net.onnx`; production (`.env.production`): `https://huggingface.co/xxparthparekhxx/sigma-go/resolve/main/chess_net.onnx` | Where the network is fetched from. |
+| `VITE_MODEL_URL` | dev: `/model/chess_net.onnx`; production (`.env.production`): the Hugging Face file pinned to commit `be4737a` | Where the network is fetched from. |
 | `VITE_MODEL_VERSION` | `1` | Part of the Cache API cache name. Change it when you publish a new network. |
 | `VITE_ORT_EXTERNAL_BASE` | jsDelivr, pinned to the onnxruntime-web version | Where WebGPU browsers without JSPI load the 28 MiB WebGPU runtime from. Set empty to turn that path off. |
 
@@ -192,14 +192,15 @@ Nothing has been deployed or uploaded. These are the steps.
    hf repos create xxparthparekhxx/sigma-go --public --exist-ok
    hf upload xxparthparekhxx/sigma-go webgpu/model/chess_net.onnx chess_net.onnx
    ```
-   The resulting URL is `https://huggingface.co/xxparthparekhxx/sigma-go/resolve/main/chess_net.onnx`, which is what
-   `.env.production` already points at. Check that cross-origin fetching works:
+   `.env.production` points at the file pinned to a commit, `https://huggingface.co/xxparthparekhxx/sigma-go/resolve/be4737ae10c67b784eec33fd983da9b16dbe21b4/chess_net.onnx`, so a later upload can't change what the
+   live site loads. After uploading a new network, put the new commit in that URL. Check that cross-origin fetching
+   works:
    ```bash
    curl -sIL -H 'Origin: https://chess.parthparekhdev.com' \
      https://huggingface.co/xxparthparekhxx/sigma-go/resolve/main/chess_net.onnx | grep -i -E '^HTTP|access-control-allow-origin|content-length'
    ```
    You want `access-control-allow-origin` (either `*` or your origin) on the redirect and on the final response.
-   (For other public files on Hugging Face I saw exactly that, on both hops; your repo does not exist yet, so it was not checked.)
+   For the published file both hops have it: the redirect echoes the origin and the CDN sends `*`.
    If you publish a new network later, change `VITE_MODEL_VERSION` so returning visitors fetch it.
 3. **Build.** `cd webgpu && npm ci && npm run build`. This also copies `public/_headers` into `dist/`.
 4. **Deploy as Workers static assets** (no Worker script). `wrangler.jsonc` is ready:
