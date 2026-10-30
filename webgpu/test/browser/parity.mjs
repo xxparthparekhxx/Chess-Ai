@@ -4,6 +4,7 @@
 // Variants (see site.mjs): wasm, webgl-swiftshader, webgpu-swiftshader (software renderer: accuracy counts, speed
 // does not), webgl-igpu, webgl-nvidia, webgpu-nvidia (real GPUs of the machine it was run on).
 // Usage: node test/browser/parity.mjs [variant ...]
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launchChrome } from './chrome.mjs';
@@ -55,53 +56,72 @@ async function inPage({ engineSrc, backend, positions, searchFens, searchMs }) {
   return { info, policyMax, legalMax, valueMax, top1, count: positions.length, mismatches, searches };
 }
 
+/** How busy the NVIDIA GPU is right now (other jobs share it, and its speed in the numbers below depends on that); null if unknown. */
+function nvidiaBusy() {
+  try {
+    return Number(execFileSync('nvidia-smi', ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'], { encoding: 'utf8', timeout: 5000 }).trim().split('\n')[0]);
+  } catch {
+    return null;
+  }
+}
+
 const preview = await startPreview();
 const results = {};
 let failed = false;
 try {
   for (const variant of variants) {
     const { backend, renderer, args, env } = VARIANTS[variant];
-    const chrome = await launchChrome(args, env);
-    try {
-      await chrome.goto(preview.url + blankPage());
-      const isolated = await chrome.run(() => crossOriginIsolated);
-      // Headless Chrome hands out its GPU adapter unreliably (about one run in three says "Failed to get GPU
-      // adapter" although the probe just saw one), so a run that ended on another backend is retried.
-      let r;
-      for (let attempt = 1; attempt <= 4; attempt++) {
-        r = await chrome.run(inPage, { engineSrc: pageEngine(workerPath()), backend, positions, searchFens: SEARCH_FENS, searchMs: 3000 });
+    // Headless Chrome hands out its GPU adapter unreliably (a run in two or three says "Failed to get GPU adapter"
+    // although the probe just saw one, and a Chrome that failed once keeps failing), so a run that ended on another
+    // backend is repeated in a fresh Chrome.
+    let last;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      const chrome = await launchChrome(args, env);
+      try {
+        await chrome.goto(preview.url + blankPage());
+        const isolated = await chrome.run(() => crossOriginIsolated);
+        const gpuBusy = nvidiaBusy();
+        const r = await chrome.run(inPage, { engineSrc: pageEngine(workerPath()), backend, positions, searchFens: SEARCH_FENS, searchMs: 3000 });
+        last = { chrome, r, isolated, gpuBusy, browser: await chrome.version() };
         if (r.info.backend === backend) break;
         console.log(variant, `attempt ${attempt} ran on ${r.info.backend}: ${r.info.webgpuNote ?? r.info.webglNote}`);
+      } catch (err) {
+        last = { error: err, console: chrome.consoleLines.slice(-8) };
+        console.log(variant, `attempt ${attempt} failed: ${String(err.message ?? err).slice(0, 200)}`);
+      } finally {
+        await chrome.close();
       }
-      const ok = r.info.backend === backend && r.legalMax < 1e-3 && r.valueMax < 1e-3 && r.top1 === r.count;
-      if (!ok) failed = true;
-      results[variant] = {
-        browser: await chrome.version(),
-        renderer,
-        isolated,
-        runtime: r.info.runtime,
-        threads: r.info.threads,
-        webgpuNote: r.info.webgpuNote,
-        webglNote: r.info.webglNote,
-        positions: r.count,
-        policyMaxAbsAllLogits: r.policyMax,
-        policyMaxAbsLegal: r.legalMax,
-        valueMaxAbs: r.valueMax,
-        sameBestLegalMove: `${r.top1}/${r.count}`,
-        mismatches: r.mismatches,
-        autoBatch: r.info.autoBatchSize,
-        calibration: r.info.calibration,
-        simsPerSecond: r.searches.map((x) => Math.round(x.simsPerSecond * 10) / 10),
-        pass: ok,
-      };
-      console.log(variant, JSON.stringify(results[variant]));
-    } catch (err) {
-      failed = true;
-      results[variant] = { error: String(err.message ?? err), console: chrome.consoleLines.slice(-8) };
-      console.log(variant, 'FAILED', results[variant]);
-    } finally {
-      await chrome.close();
     }
+    if (!last || last.error) {
+      failed = true;
+      results[variant] = { error: String(last?.error?.message ?? last?.error ?? 'no run'), console: last?.console };
+      console.log(variant, 'FAILED', results[variant]);
+      continue;
+    }
+    const { r, isolated, gpuBusy, browser } = last;
+    const ok = r.info.backend === backend && r.legalMax < 1e-3 && r.valueMax < 1e-3 && r.top1 === r.count;
+    if (!ok) failed = true;
+    results[variant] = {
+      browser,
+      renderer,
+      isolated,
+      nvidiaBusyPercentAtStart: gpuBusy,
+      runtime: r.info.runtime,
+      threads: r.info.threads,
+      webgpuNote: r.info.webgpuNote,
+      webglNote: r.info.webglNote,
+      positions: r.count,
+      policyMaxAbsAllLogits: r.policyMax,
+      policyMaxAbsLegal: r.legalMax,
+      valueMaxAbs: r.valueMax,
+      sameBestLegalMove: `${r.top1}/${r.count}`,
+      mismatches: r.mismatches,
+      autoBatch: r.info.autoBatchSize,
+      calibration: r.info.calibration,
+      simsPerSecond: r.searches.map((x) => Math.round(x.simsPerSecond * 10) / 10),
+      pass: ok,
+    };
+    console.log(variant, JSON.stringify(results[variant]));
   }
 } finally {
   preview.stop();

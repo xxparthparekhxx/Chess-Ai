@@ -1,7 +1,8 @@
 # Sigma-Go in the browser
 
 The Sigma-Go engine (ResNet policy/value network + Monte Carlo tree search) as a static web page.
-The network runs on the visitor's own GPU through WebGPU, with a WebAssembly (CPU) fallback.
+The network runs on the visitor's own GPU through WebGPU, or through WebGL where WebGPU isn't available, with a
+WebAssembly (CPU) fallback.
 There is no server-side inference and no server code.
 
 This directory is separate from the Python engine and does not change it. The Python side only
@@ -13,7 +14,7 @@ provides two helper scripts in `../scripts/` (export the network, dump test fixt
 | --- | --- |
 | Visitor's browser, main thread | Board, controls, game state (chess.js). |
 | Visitor's browser, Web Worker | Network download and cache, onnxruntime-web, the MCTS search, move generation for the search. |
-| Visitor's GPU (or CPU) | The network forward pass: WebGPU if available, otherwise WebAssembly. |
+| Visitor's GPU (or CPU) | The network forward pass: WebGPU if available, then WebGL, otherwise WebAssembly. |
 | Cloudflare static assets | `index.html`, JS, CSS, font, and the onnxruntime-web runtime files (see below). 32 MB in total, largest file 17.1 MiB. |
 | Hugging Face (or any static host with CORS) | `chess_net.onnx`, 47.5 MiB. Downloaded once, then kept in the browser's Cache API. |
 
@@ -47,7 +48,8 @@ behave the same in all three.
 | `npm run build:local` | Same, but the network URL is `/model/chess_net.onnx` (for trying the production bundle locally). |
 | `npm run preview` | Serves `dist/` (and `webgpu/model/`) locally. |
 | `npm test` | Whole test suite, one file at a time. It took about 10 minutes here with the machine busy (the search-parity file is most of that). |
-| `npm run test:fast` | Tests that do not need the network file (a few seconds). |
+| `npm run test:fast` | Quick tests (a few seconds): encoding, search, model loader, static checks, UI helpers, the WebGL batch rewrite. |
+| `npm run test:browser` | Needs `npm run build:local` first and Chrome (`CHROME=...` to point at another binary). Runs the parity test and the page test in headless Chrome, see "Browser tests". Also: `node test/browser/threads.mjs`, `node test/browser/auto.mjs`. |
 | `npm run typecheck` | `tsc --noEmit`. |
 | `npm run export:model` | `../scripts/export_onnx.py`. Add `-- --fp16-weights` for the smaller variant. |
 | `npm run fixtures` | `../scripts/make_fixtures.py` (about 2 minutes on CPU). |
@@ -64,15 +66,37 @@ Build-time variables (see `.env.example`):
 | `VITE_MODEL_VERSION` | `1` | Part of the Cache API cache name. Change it when you publish a new network. |
 | `VITE_ORT_EXTERNAL_BASE` | jsDelivr, pinned to the onnxruntime-web version | Where WebGPU browsers without JSPI load the 28 MiB WebGPU runtime from. Set empty to turn that path off. |
 
-URL parameter: `?backend=wasm` forces the CPU backend (to compare, or to test the fallback).
+URL parameters: `?backend=wasm`, `?backend=webgl` or `?backend=webgpu` force a backend (to compare, or to test a fallback; a
+forced backend is never swapped for another because it is slow). `?fen=<FEN>` starts from a position with the side to move
+playing it (for analysis and for the browser tests); New game goes back to the normal start.
 
 ## Using it
 
-Same features as the Flask page: drag and drop (or click, click), move dots, play as White or Black, undo, flip,
-evaluation bar, move list. Added: a Hint button (the engine searches the position for you and draws an arrow),
-a "Move now" button that stops the search and plays the best move so far, a time-per-move slider
-(0.5 to 10 s, default 2 s), a batch-size setting, and an Engine panel showing the backend, simulations done,
-simulations per second, the line the search currently prefers, and start-up timing.
+Same features as the Flask page: drag and drop (or click, click; touch is tap, tap), move dots, play as White or Black,
+undo, flip, evaluation bar, move list. Changed and added:
+
+- **Board.** Last move highlighted, the king in check highlighted, legal-move dots with a ring for captures (en passant
+  included), and a game-over card on the board that says why the game ended (checkmate, stalemate, repetition,
+  insufficient material, fifty moves) with a New game button and a View board button. A press on the board while the
+  engine is thinking explains why nothing happened instead of being ignored.
+- **Moves.** Numbered rows ("1. e4 e5"), the latest move marked, scrolls to the end, rebuilt from the game on every change so it
+  cannot drift from undo. A "Type a move" box (SAN such as `Nf3`, or `e2e4`) for keyboard and screen-reader use.
+- **Thinking.** A bar for the time used out of the move's budget, the time and simulations so far, the line the search
+  prefers and its evaluation, updating about ten times a second while the worker searches. Move now stops the search early.
+  Hint draws an arrow.
+- **Settings in one place.** Time per move (1, 2, 5 or 10 s), Play as White / Black (starts a new game, after a confirmation if a
+  game is in progress), Flip board. Leaves per network call and Clear cached network are under Engine > Details.
+- **Loading.** The overlay shows the download progress (MiB of MiB), then the warm-up named after the backend ("Compiling WebGL
+  shaders ..."). When the network comes from the browser's cache the overlay title says so, and Engine shows
+  "from this browser's cache (no download)".
+- **Backend.** The chip at the top and Engine > Backend say WebGPU, WebGL or CPU (with the thread count). When WebGPU is not
+  in use, Engine > Details says why and how to turn it on for the visitor's browser, and a "Why not WebGPU?" link next to the chip
+  opens it.
+- **Links.** A small header with "Parth Parekh" (parthparekhdev.com), "How it works" (the case study), GitHub and Hugging Face. The page
+  is cross-origin isolated, so these are plain links; nothing is embedded or fetched from those sites.
+- **Phones.** The board is the full width and the panels stack under it. No horizontal scroll at 360 px.
+- **Accessibility.** Focus outlines, real labelled buttons, `prefers-reduced-motion` switches animations off, board coordinates
+  and secondary text have at least 4.5:1 contrast.
 
 The evaluation shown is from the engine's side (+1 means the engine is winning), like the original page. It is
 the search's value for the move it played, not a centipawn score.
@@ -90,7 +114,7 @@ Differences:
 - **Batch size is chosen on the device.** Python uses 8. On WebGPU the page times batches of 1, 8, 16 and 32 at
   start-up and uses the largest size that still gives at least 15 % more positions per second than the
   previous one and takes under 300 ms per call (never less than 8). On the CPU backend it times 1, 4 and 8
-  with the same rule, starting from 1. You can pin 8, 16 or 32 in the settings. The timings are shown under
+  with the same rule, starting from 1. WebGL always uses 1 (see below). You can pin 8, 16 or 32 in the settings. The timings are shown under
   Engine > Details. These are measured in the visitor's browser at start-up; they were not measured while
   writing this (see below).
 - **Same leaf twice in a batch is evaluated once.** Python evaluates it twice and gets the same answer.
@@ -161,11 +185,79 @@ simulations in a 2 s move: enough to follow the network's own preferences, not e
 scaling of the WebAssembly build in Node was inconsistent in my runs (between 0.8x and 1.6x with 4 threads), so no
 claim is made about browser threads.
 
-## Browser speed: not measured
+## Backends, in order
 
-I did not run the page in a browser, so there is no measured WebGPU or in-browser WebAssembly speed anywhere in this
-repo. The page measures its own forward-pass time at start-up (Engine > Details) and shows simulations per second
-while thinking; read those on the target hardware before quoting a number.
+1. **WebGPU, JSPI build** (Chrome / Edge 137+ and anything else with WebAssembly JSPI).
+2. **WebGPU, asyncify build**, loaded from jsDelivr, for browsers that have WebGPU but not JSPI.
+3. **WebGL**, onnxruntime-web's `onnxruntime-web/webgl` build (a 0.5 MiB script, no `.wasm`).
+4. **CPU**, onnxruntime-web's WebAssembly build, multi-threaded when the page is cross-origin isolated.
+
+A GPU backend that is not clearly fast (under 150 positions/s in the start-up timing) is timed against the CPU backend and the
+faster one is used, so a software renderer, a small integrated GPU, or a hybrid laptop where the browser picked the weak card
+does not end up slower than the CPU. The note says what was measured. `?backend=` skips that check. A WebGL context that is
+drawn by the CPU (SwiftShader, llvmpipe) is not used in automatic mode at all.
+
+### What the WebGL tier does and does not do
+
+- It runs this graph (Conv, Add, Relu, Flatten, Gemm, Tanh) and matches PyTorch: see the table below.
+- **It needs two workarounds.** `env.webgl.pack = true` (unpacked textures gave wrong numbers for this network, even at batch 1), and a
+  fixed batch axis: the backend cannot take a symbolic dimension and ignores `freeDimensionOverrides`, so `src/worker/fixBatch.ts`
+  rewrites the batch dimension in the `.onnx` bytes before the session is created (the 47 MiB of weights are copied untouched).
+- **It only works at batch 1.** onnxruntime-web 1.31.1's WebGL `Conv` returns wrong numbers for any batch above 1 (policy error up to 13 on the
+  logits; already the first Conv of the network differs, on SwiftShader and on a hardware GPU). So there is one session, batch 1, and the
+  search runs with one leaf per network call. A bigger batch would be split into one call per position (`MultiSessionEvaluator`).
+  That caps WebGL at about the speed of a good multi-threaded CPU on this machine; its use is machines where the GPU is much faster than
+  the CPU cores, and as a second choice where WebGPU is not available.
+- The WebGL context needs float render targets (`EXT_color_buffer_float`); without them the tier is skipped and the reason is shown.
+
+### Browser tests (headless Chrome 156, Linux)
+
+`test/browser/` drives the built site in headless Chrome over the DevTools protocol (Node's built-in WebSocket, no dependencies; Chrome
+is `/usr/bin/google-chrome-stable`, override with `CHROME=`). They load `vite preview` of a `build:local` build and talk to the real
+worker bundle.
+
+- `parity.mjs` runs the 54 fixture positions through the network in each backend variant and compares with PyTorch
+  (`test/fixtures/fixtures.json`): max abs error on all 4544 logits, on the legal moves' logits, on the value, whether the best legal move
+  is the same, and search speed (3 s per position, 3 positions).
+- `ui.mjs` loads the page at 360 px wide with touch emulation and checks (DOM assertions, no screenshots): loading, the backend chip, the links,
+  tap-to-move, last-move highlight, a press during the engine's turn, the engine's reply, progress over the time budget, the move list and
+  undo, typed moves, settings, game over (mate in one set up with `?fen=`), the cache message on the second visit, labels, focus outline,
+  contrast, `prefers-reduced-motion`, and no horizontal scroll.
+- `threads.mjs` measures search speed against CPU thread count. `auto.mjs` prints what the page chooses on each GPU setup.
+
+Variants: `wasm`; `webgl-swiftshader` and `webgpu-swiftshader` (Chrome's software renderer, what a machine without a usable GPU gets);
+`webgl-igpu` (AMD Radeon 610M through ANGLE-OpenGL); `webgl-nvidia` (RTX 5060 Laptop through ANGLE-OpenGL with the PRIME offload
+variables); `webgpu-nvidia` (RTX 5060 Laptop through Vulkan with `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=native
+--use-angle=vulkan`). Headless Chrome hands out its WebGPU adapter unreliably (a run in two or three), so `webgpu-nvidia` is repeated in a
+fresh Chrome until it gets one.
+
+Results, 2026-10-30, Chrome 156.0.8078.79, Ryzen 9 8940HX, onnxruntime-web 1.31.1, fp32 network. Errors are max abs differences from PyTorch:
+
+| Variant | Logits, all 4544 | Logits, legal moves | Value | Same best legal move | Search speed (simulations/s) | Batch |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU, 8 threads | 1.3e-5 | 8.6e-6 | 1.9e-7 | 54/54 | 82 to 87 | 1 |
+| WebGL, SwiftShader (software) | 1.7e-5 | 9.3e-6 | 4.2e-7 | 54/54 | 2.4 to 3.2 | 1 |
+| WebGPU, SwiftShader (software) | 1.9e-5 | 9.1e-6 | 4.5e-7 | 54/54 | 1.1 to 1.6 | 8 |
+| WebGL, AMD Radeon 610M | 1.9e-5 | 8.1e-6 | 3.6e-7 | 54/54 | 10 to 16 | 1 |
+| WebGL, RTX 5060 Laptop | 1.9e-5 | 8.1e-6 | 3.6e-7 | 54/54 | 68 to 117 | 1 |
+| WebGPU (JSPI), RTX 5060 Laptop | 2.1e-5 | 9.5e-6 | 4.8e-7 | 54/54 | 1060 to 1520 | 16 to 32 |
+
+Read the speed column with care. These are headless runs on a machine that was shared with other jobs: another process was keeping the
+RTX 5060 at 94 to 100 % for part of the runs (the WebGL RTX figure is 68 when it was busy and 115 on an earlier run; the table gives the range),
+and the CPU figures swing between about 25 and 87 simulations/s with the machine's load (an earlier run with a load average of 33 gave 11 to 25).
+SwiftShader numbers only show that those paths work; they say nothing about a real GPU. None of this is a measurement on a visitor's machine.
+
+### CPU threads
+
+`test/browser/threads.mjs`, search speed in simulations per second (mean of three positions), machine busy with other jobs:
+
+| Threads | 1 | 2 | 3 | 4 | 6 | 8 | 12 | 16 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Simulations/s | 12.5 | 22.7 | 54 | 47 to 68 | 54 to 77 | 57 to 80 | 68 to 83 | 70 |
+
+While the machine was saturated (load average 33) every count from 4 to 16 gave the same 24. The network is small, so extra threads help less
+and less; 8 give most of what 12 do and 16 are slower. The rule (`src/worker/threads.ts`) is all cores but one, at most 8, and 1 when the page is
+not cross-origin isolated. Before, onnxruntime picked min(4, cores / 2).
 
 ## Browser support
 
@@ -175,15 +267,22 @@ while thinking; read those on the target hardware before quoting a number.
   - if it has WebGPU but not JSPI, onnxruntime-web's asyncify build is loaded from `VITE_ORT_EXTERNAL_BASE`
     (default jsDelivr), because its `.wasm` is 28 MiB, above Cloudflare's 25 MiB limit;
   - if that is disabled or fails, the CPU backend is used.
+- **WebGL backend.** Needs a WebGL 2 context with `EXT_color_buffer_float` that is not a software renderer. Batch 1 only (see above).
 - **CPU backend (fallback).** onnxruntime-web's plain WebAssembly build (14.2 MiB `.wasm`, bundled). It needs
   WebAssembly SIMD. Multi-threaded only when the page is cross-origin isolated (the `_headers` file sets COOP and COEP);
-  otherwise one thread.
-- Which browsers have WebGPU and JSPI, and since which version, was not checked here. The page looks at the features, not user agents. The
-  chip at the top of the page and Engine > Details say what was actually chosen and why WebGPU was not used.
+  otherwise one thread. Thread count: see above.
+- **Turning WebGPU on.** On Linux, Chrome (checked against the flag list of Chrome 156) needs `chrome://flags/#enable-unsafe-webgpu`
+  ("Unsafe WebGPU Support") and `chrome://flags/#enable-vulkan` ("Vulkan") set to Enabled, then a relaunch, and a working Vulkan driver. Firefox:
+  `about:config`, `dom.webgpu.enabled` = true; WebGPU in Firefox is on by default on Windows from version 141, and on Linux was
+  still Nightly-only when last looked up (the gpuweb implementation-status wiki, undated), so on Linux Firefox the setting may do nothing.
+  Engine > Details shows the steps for the visitor's browser (`src/ui/advice.ts`); the Firefox text was not tried in Firefox.
+- Which browsers have WebGPU and JSPI, and since which version, was not checked here. The page looks at the features, not user agents (the
+  user agent only picks which advice to show). The chip at the top of the page and Engine > Details say what was actually chosen and why WebGPU was
+  not used.
 
-## Deploying to chess.parthparekhdev.com (not done yet)
+## Deploying to chess.parthparekhdev.com
 
-Nothing has been deployed or uploaded. These are the steps.
+The site is live at https://chess.parthparekhdev.com (Workers static assets, network on Hugging Face). These are the steps.
 
 1. **Export** the network (above) and, if you want it, the fp16-weights variant (below).
 2. **Upload to Hugging Face.** Create a public model repo `xxparthparekhxx/sigma-go`, then for example:
@@ -235,28 +334,24 @@ and the MCTS picks the same move as Python in 54/54 at 200 simulations. Not test
 onnxruntime-web's WebGPU backend folds the weight `Cast` nodes at load or runs them on every call. To use it, upload it and point
 `VITE_MODEL_URL` at it. At 24.9 MB it would also fit under Cloudflare's per-file limit, but it is not configured to ship with the site.
 
-## Checking it in a browser
+## Checking it by hand
 
-Not done by me. Things to check, in a Chromium browser with WebGPU first, then without:
+The headless tests above cover the logic and the layout at 360 px. Not covered, so check on real browsers:
 
-1. `npm run build:local && npm run preview` (or `npm run dev`). Open the page. The chip should go from "Loading engine" to "WebGPU" (green)
-   or "CPU (WebAssembly, N threads)" (amber). Engine > Details says which runtime and why.
-2. First load shows download progress; reload: the network should come from cache ("from cache" in Details, no 47 MB transfer in the Network tab).
-3. DevTools console: `crossOriginIsolated` should be `true`. If not, the CPU backend runs on one thread.
-4. Play a few moves: drag and drop, click-click, promotion picker (move a pawn to the last rank), castling, en passant, undo, flip, play as Black
-   (the engine moves first), Hint (arrow appears), "Move now" while thinking.
-5. While thinking, the status line shows the thinking message, the Engine panel shows simulations, sims/s and a line. Read sims/s and the start-up
-   batch timings from Details; that is the browser speed number nobody has yet.
-6. Change "Time per move" to 0.5 s and 10 s and confirm the move arrives about when expected.
-7. `?backend=wasm` should force the CPU backend. Try a browser or flag combination without WebGPU to see the fallback note.
-8. After deploying: the production page should fetch the network from Hugging Face with no CORS errors in the console, and `/ort/<version>/...wasm`
-   should be served as `application/wasm`.
+1. Chrome on Linux with the two flags, then without: the chip goes WebGPU / WebGL / CPU, and Engine > Details gives the right steps.
+2. Firefox (any OS): the chip, the Details text, and whether `dom.webgpu.enabled` does what the page says. Safari and Edge as well.
+3. A real phone: tap-to-move, the board filling the width, the keyboard for "Type a move", scrolling the page from the board.
+4. A screen reader on the board, the move list and the game-over card.
+5. The first load against the production Hugging Face URL (no CORS errors in the console), then a reload (network from cache).
+6. `crossOriginIsolated` is `true` in the console; if not, the CPU backend runs on one thread.
 
 ## Known limits
 
-- No browser run, so no browser speed, and the UI, worker wiring to real onnxruntime-web, and the WebGPU path are untested beyond type checks,
-  a production build, Node tests of the worker with onnxruntime-node standing in, and onnxruntime-web's WebAssembly build in Node.
-- The CPU fallback is slow (see the Node timings). The default 2 s per move gives few simulations there; the page says roughly how many.
+- Everything in a browser was run headless in one Chrome (156, Linux). Not run: Firefox, Safari, Edge, Windows, macOS, a phone, a headed Chrome
+  with a person's own flags, the asyncify WebGPU build (jsDelivr), screen readers. The 360 px layout was checked with device emulation, not a phone.
+- The speed numbers are from a machine shared with other jobs (see the table); they are not what a visitor will get.
+- WebGL is batch 1 only (see above), so it is about as fast as a good multi-threaded CPU on this machine, not much faster. WebGPU is where the speed is.
+- The CPU fallback is slow on a weak CPU. The default 2 s per move gives few simulations there; the page says roughly how many.
 - Fivefold repetition is not detected inside the search (the Python web page did not have game history either; `main.py` did). The page itself
   ends the game on chess.js's draw rules (threefold repetition, 50 moves, insufficient material, stalemate).
 - The search uses chess.js's internal move functions (`_moves`, `_makeMove`, `_undoMove`) because its public API is about 40 times slower per
@@ -301,19 +396,26 @@ webgpu/
   src/main.ts                        entry
   src/ui/app.ts                      game, controls, panels
   src/ui/board.ts                    the board
+  src/ui/advice.ts                   why WebGPU is not in use and how to turn it on, per browser
+  src/ui/gameOver.ts                 the reason a game ended
+  src/ui/moveList.ts                 numbered rows for the move list
   src/engineClient.ts                page-side handle on the worker
   src/messages.ts                    worker protocol
   src/worker/engine.worker.ts        loads the network, runs searches, times batch sizes
   src/worker/modelLoader.ts          download with progress + Cache API
-  src/worker/ortBackend.ts           WebGPU / WASM selection
+  src/worker/ortBackend.ts           WebGPU / WebGL / WASM selection
+  src/worker/fixBatch.ts             sets the batch axis of the .onnx bytes (WebGL)
+  src/worker/backendChoice.ts        when a GPU is timed against the CPU
+  src/worker/threads.ts              CPU thread rule and the measurements behind it
   src/engine/moveMap.ts              port of create_uci_labels / MOVE_TO_INT
   src/engine/position.ts             chess.js adapter: legal moves in python-chess order, encoding, game result
   src/engine/mcts.ts                 port of src/mcts.py
-  src/engine/ortEvaluator.ts         onnxruntime session -> policy / value (browser and Node)
+  src/engine/ortEvaluator.ts         onnxruntime session -> policy / value (browser and Node); one-session-per-size variant for WebGL
   public/_headers                    Cloudflare headers
   wrangler.jsonc                     Workers static assets config (not deployed)
   vite.config.ts                     dev model route, runtime files, dist size guard
   test/                              vitest suites; test/fixtures/fixtures.json from the Python engine
+  test/browser/                      headless Chrome tests: parity, page, threads, auto-selection
   model/                             exported .onnx files (git-ignored)
 ../scripts/export_onnx.py            PyTorch -> ONNX
 ../scripts/make_fixtures.py          fixtures from the Python code
