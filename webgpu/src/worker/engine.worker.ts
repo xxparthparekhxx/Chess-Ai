@@ -140,13 +140,14 @@ async function init(req: InitRequest): Promise<void> {
     const gpuRate = Math.max(...prepared.rows.map((r) => r.positionsPerSecond));
     if (req.backend === 'auto' && created.backend !== 'wasm' && gpuRate < MIN_GPU_POSITIONS_PER_SECOND) {
       const slow = created;
-      const why = `${slow.backend === 'webgpu' ? 'WebGPU' : 'WebGL'} ran at only ${gpuRate.toFixed(0)} positions/s here (a software or small GPU), slower than the CPU, so the CPU is used.`;
+      const why = `${slow.backend === 'webgpu' ? 'WebGPU' : 'WebGL'} ran at only ${gpuRate.toFixed(0)} positions/s${slow.gpu ? ` on ${slow.gpu}` : ''}, slower than the CPU, so the CPU is used.`;
       post({ type: 'progress', phase: 'runtime', message: 'That GPU is slow, switching to the CPU' });
       for (const old of new Set([slow.session, ...slow.sessions.values()])) await old.release().catch(() => undefined);
       created = await createSession(model.bytes, 'wasm', req.ortExternalBase, onStep, req.threads ?? 0);
       created.webgpuNote = slow.backend === 'webgpu' ? why : slow.webgpuNote;
       created.webgpuProblem = slow.backend === 'webgpu' ? 'slow-gpu' : slow.webgpuProblem;
       created.webglNote = slow.backend === 'webgl' ? why : slow.webglNote;
+      created.gpu = slow.gpu;
       prepared = await prepare(created);
     }
     const { rows, batch, buckets, ev } = prepared;
@@ -163,6 +164,7 @@ async function init(req: InitRequest): Promise<void> {
         webgpuNote: created.webgpuNote,
         webgpuProblem: created.webgpuProblem,
         webglNote: created.webglNote,
+        gpu: created.gpu,
         buckets,
         modelBytes: model.bytes.byteLength,
         fromCache: model.fromCache,

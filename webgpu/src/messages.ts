@@ -59,6 +59,8 @@ export interface ReadyInfo {
   webgpuProblem: WebGpuProblem | null;
   /** why the WebGL backend is not in use, when it was tried and failed */
   webglNote: string | null;
+  /** the GPU the browser reported for the backend in use (or, on the CPU backend, for WebGL / WebGPU), when it said */
+  gpu: string | null;
   /** batch sizes the network was run at (WebGL / WebGPU pad to these), or null for any size */
   buckets: number[] | null;
   modelBytes: number;

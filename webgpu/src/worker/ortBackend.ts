@@ -42,22 +42,28 @@ export interface CreatedSession {
   webgpuNote: string | null;
   webgpuProblem: WebGpuProblem | null;
   webglNote: string | null;
+  /** name of the GPU the running GPU backend (or, on the CPU backend, WebGL) reported, when it said */
+  gpu: string | null;
 }
 
 interface GpuNavigator {
-  gpu?: { requestAdapter(): Promise<unknown | null> };
+  gpu?: { requestAdapter(): Promise<{ info?: { vendor?: string; architecture?: string; description?: string } } | null> };
 }
 
-async function probeWebGpu(): Promise<{ problem: WebGpuProblem; note: string } | null> {
+type WebGpuProbe = { problem: WebGpuProblem; note: string } | { problem: null; gpu: string | null };
+
+async function probeWebGpu(): Promise<WebGpuProbe> {
   const gpu = (navigator as unknown as GpuNavigator).gpu;
   if (!gpu) return { problem: 'no-api', note: 'This browser does not expose WebGPU (navigator.gpu is missing).' };
   try {
     const adapter = await gpu.requestAdapter();
     if (!adapter) return { problem: 'no-adapter', note: 'WebGPU is present but no GPU adapter is available (blocklisted GPU or driver).' };
+    const i = adapter.info;
+    const name = [i?.vendor, i?.architecture, i?.description].filter(Boolean).join(' ');
+    return { problem: null, gpu: name || null };
   } catch (err) {
     return { problem: 'adapter-error', note: `WebGPU adapter request failed: ${(err as Error).message}` };
   }
-  return null;
 }
 
 function hasJspi(): boolean {
@@ -65,8 +71,8 @@ function hasJspi(): boolean {
   return typeof wa.Suspending === 'function' && typeof wa.promising === 'function';
 }
 
-/** null when a hardware WebGL 2 context with float render targets exists; otherwise the reason it cannot be used. */
-export function probeWebGl(force: boolean): string | null {
+/** note = null when a hardware WebGL 2 context with float render targets exists, otherwise the reason it cannot be used. */
+export function probeWebGl(force: boolean): { note: string | null; renderer: string | null } {
   let gl: WebGL2RenderingContext | null = null;
   try {
     const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
@@ -74,16 +80,16 @@ export function probeWebGl(force: boolean): string | null {
   } catch {
     gl = null;
   }
-  if (!gl) return 'WebGL 2 is not available in this browser (or is turned off).';
-  if (!gl.getExtension('EXT_color_buffer_float')) return 'This WebGL context cannot render to 32-bit float textures, which the network needs.';
-  if (!force) {
-    const info = gl.getExtension('WEBGL_debug_renderer_info');
-    const renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
-    if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(renderer)) {
-      return `WebGL is drawn by the CPU here (${renderer}), which is slower than the CPU backend.`;
-    }
+  if (!gl) return { note: 'WebGL 2 is not available in this browser (or is turned off).', renderer: null };
+  const debug = gl.getExtension('WEBGL_debug_renderer_info');
+  const renderer = debug ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)) : null;
+  if (!gl.getExtension('EXT_color_buffer_float')) {
+    return { note: 'This WebGL context cannot render to 32-bit float textures, which the network needs.', renderer };
   }
-  return null;
+  if (!force && renderer && /swiftshader|llvmpipe|softpipe|software|basic render/i.test(renderer)) {
+    return { note: `WebGL is drawn by the CPU here (${renderer}), which is slower than the CPU backend.`, renderer };
+  }
+  return { note: null, renderer };
 }
 
 export async function createSession(
@@ -97,12 +103,15 @@ export async function createSession(
   const attempts: Runtime[] = [];
   let webgpuProblem: WebGpuProblem | null = null;
   let webglNote: string | null = null;
+  let webgpuName: string | null = null;
+  let webglName: string | null = null;
 
   if (preference === 'auto' || preference === 'webgpu') {
-    const problem = await probeWebGpu();
-    if (problem) {
-      notes.push(problem.note);
-      webgpuProblem = problem.problem;
+    const probe = await probeWebGpu();
+    webgpuName = probe.problem ? null : probe.gpu;
+    if (probe.problem) {
+      notes.push(probe.note);
+      webgpuProblem = probe.problem;
     } else if (hasJspi()) attempts.push('jspi');
     else if (externalBase) attempts.push('asyncify');
     else {
@@ -115,7 +124,9 @@ export async function createSession(
   }
 
   if (preference !== 'wasm') {
-    webglNote = probeWebGl(preference === 'webgl');
+    const gl = probeWebGl(preference === 'webgl');
+    webglNote = gl.note;
+    webglName = gl.renderer;
     if (!webglNote) attempts.push('webgl');
   }
   attempts.push('wasm');
@@ -132,6 +143,7 @@ export async function createSession(
         webgpuNote: notes.length ? notes.join(' ') : null,
         webgpuProblem: created.backend === 'webgpu' ? null : webgpuProblem,
         webglNote,
+        gpu: created.backend === 'webgpu' ? webgpuName : created.backend === 'webgl' ? webglName : webglName ?? webgpuName,
       };
     } catch (err) {
       lastError = err;

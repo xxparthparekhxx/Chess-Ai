@@ -1,13 +1,15 @@
 // Page-side handle on the engine worker.
 
 import type { SearchProgress, SearchResult } from './engine/types';
-import type { BackendPreference, FromWorker, LoadPhase, ReadyInfo, ToWorker } from './messages';
+import type { BackendName, BackendPreference, FromWorker, LoadPhase, ReadyInfo, ToWorker } from './messages';
 
 export interface LoadProgress {
   phase: LoadPhase;
   loaded?: number;
   total?: number;
   message: string;
+  /** the backend being warmed up, during the warm-up phase */
+  backend?: BackendName;
 }
 
 export interface SearchParams {
