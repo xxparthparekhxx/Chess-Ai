@@ -69,7 +69,7 @@ describe('webgpuAdvice', () => {
   });
   it('Chrome on Linux: the two flags, by name', () => {
     const a = webgpuAdvice({ ...base, backend: 'webgl', gpu: 'ANGLE (NVIDIA)', webgpuProblem: 'no-api' }, CHROME_LINUX)!;
-    expect(a.reason).toMatch(/^Running on WebGL \(ANGLE \(NVIDIA\)\) because this browser does not offer WebGPU/);
+    expect(a.reason).toMatch(/^Running on WebGL \(ANGLE \(NVIDIA\)\)\. This browser does not offer WebGPU/);
     const text = a.steps.join('\n');
     expect(text).toContain('chrome://flags/#enable-unsafe-webgpu');
     expect(text).toContain('chrome://flags/#enable-vulkan');
@@ -80,12 +80,12 @@ describe('webgpuAdvice', () => {
     expect(text).toContain('dom.webgpu.enabled');
     expect(text).toMatch(/Nightly/);
     expect(text).toContain('WebGL was not used either');
-    const slowGl = webgpuAdvice({ ...base, backend: 'wasm', webgpuProblem: 'no-api', webglNote: 'WebGL ran at only 10 positions/s on AMD, slower than the CPU, so the CPU is used.' }, CHROME_LINUX)!;
+    const slowGl = webgpuAdvice({ ...base, backend: 'wasm', webgpuProblem: 'no-api', webglNote: 'WebGL on AMD ran at 10 positions/s and the CPU at 40, so the CPU is used.' }, CHROME_LINUX)!;
     expect(slowGl.steps.join('\n')).toMatch(/DRI_PRIME=1/);
   });
   it('a hand-picked backend gets no steps; a slow GPU gets the dual-GPU tip', () => {
     expect(webgpuAdvice({ ...base, backend: 'wasm', webgpuProblem: 'forced-off' }, CHROME_LINUX)!.steps).toEqual([]);
-    const slow = webgpuAdvice({ ...base, backend: 'wasm', webgpuProblem: 'slow-gpu', webgpuNote: 'WebGPU ran at only 1 positions/s, slower than the CPU, so the CPU is used.' }, CHROME_LINUX)!;
+    const slow = webgpuAdvice({ ...base, backend: 'wasm', webgpuProblem: 'slow-gpu', webgpuNote: 'WebGPU on google swiftshader ran at 2 positions/s and the CPU at 40, so the CPU is used.' }, CHROME_LINUX)!;
     expect(slow.steps[0]).toMatch(/DRI_PRIME=1/);
   });
 });

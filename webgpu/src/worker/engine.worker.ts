@@ -6,6 +6,7 @@ import { PLANE_FLOATS, encodeFen } from '../engine/position';
 import type { EvalOutput, Evaluator } from '../engine/types';
 import type { BackendName, CalibrationRow, EvaluateRequest, FromWorker, InitRequest, SearchRequest, ToWorker } from '../messages';
 import { clearModelCache, loadModel } from './modelLoader';
+import { cpuIsFaster, needsCpuCheck, slowGpuNote } from './backendChoice';
 import { createSession, type CreatedSession } from './ortBackend';
 
 const ctx = self as unknown as {
@@ -54,19 +55,28 @@ function median(xs: number[]): number {
  * per network call. WebGPU starts from 8 (the Python engine's batch); on the CPU a batch gives no
  * speed-up, so it starts from 1.
  */
+/** How long a GPU backend is kept busy at the first batch size before it is timed. */
+const WARM_MS = 500;
+
 async function calibrate(ev: Evaluator, backend: BackendName): Promise<{ rows: CalibrationRow[]; batch: number }> {
   const start = encodeFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const gpu = backend !== 'wasm';
   // WebGL only has a batch-1 session (its Conv is wrong for larger batches), so batching gives it nothing
   const sizes = backend === 'webgpu' ? [1, 8, 16, 32] : backend === 'webgl' ? [1] : [1, 4, 8];
   const candidates = backend === 'webgpu' ? [8, 16, 32] : backend === 'webgl' ? [1] : [1, 4, 8];
-  const timedRuns = backend === 'webgpu' ? 3 : backend === 'webgl' ? 2 : 1;
+  const timedRuns = backend === 'webgpu' ? 3 : backend === 'webgl' ? 5 : 1;
   const rows: CalibrationRow[] = [];
   for (const batch of sizes) {
     const planes = new Float32Array(batch * PLANE_FLOATS);
     for (let i = 0; i < batch; i++) planes.set(start, i * PLANE_FLOATS);
-    // The first run at a new shape compiles shaders / allocates buffers on the GPU; not timed.
+    // The first run at a new shape compiles shaders / allocates buffers on the GPU; not timed. A GPU that has been
+    // idle also takes a few hundred milliseconds of work to leave its low-power state (a laptop's dedicated card
+    // measured 26 and 166 positions/s on a cold and a warm start), so it is kept busy for a moment before timing.
     if (gpu || batch === sizes[0]) await ev.evaluate(planes, batch);
+    if (gpu) {
+      const warmUntil = performance.now() + (batch === sizes[0] ? WARM_MS : WARM_MS / 4);
+      while (performance.now() < warmUntil) await ev.evaluate(planes, batch);
+    }
     const times: number[] = [];
     for (let i = 0; i < timedRuns; i++) {
       const t = performance.now();
@@ -90,11 +100,19 @@ async function calibrate(ev: Evaluator, backend: BackendName): Promise<{ rows: C
   return { rows, batch: chosen };
 }
 
-/** Below this a GPU backend loses to the CPU backend (about 25 positions/s on 4 threads), so automatic mode skips it. */
-const MIN_GPU_POSITIONS_PER_SECOND = 20;
-
 /** Builds the evaluator for a created session, warms it up and times it. */
-async function prepare(created: CreatedSession): Promise<{ rows: CalibrationRow[]; batch: number; buckets: number[] | null; ev: Evaluator }> {
+interface Prepared {
+  rows: CalibrationRow[];
+  batch: number;
+  buckets: number[] | null;
+  ev: Evaluator;
+}
+
+async function release(created: CreatedSession): Promise<void> {
+  for (const s of new Set([created.session, ...created.sessions.values()])) await s.release().catch(() => undefined);
+}
+
+async function prepare(created: CreatedSession): Promise<Prepared> {
   // On WebGPU every new input shape can trigger a shader compile, so batches are padded up to a few
   // fixed sizes that get warmed up below. WebGL has one session per fixed size. On the CPU cost is
   // proportional to batch size, so no padding.
@@ -135,20 +153,27 @@ async function init(req: InitRequest): Promise<void> {
     let created = await createSession(model.bytes, req.backend, req.ortExternalBase, onStep, req.threads ?? 0);
     let prepared = await prepare(created);
 
-    // A GPU that is slower than the CPU (a software renderer, a small integrated GPU) is not worth using.
-    // Only when the backend was left on automatic; ?backend=webgl / webgpu stays what was asked for.
-    const gpuRate = Math.max(...prepared.rows.map((r) => r.positionsPerSecond));
-    if (req.backend === 'auto' && created.backend !== 'wasm' && gpuRate < MIN_GPU_POSITIONS_PER_SECOND) {
-      const slow = created;
-      const why = `${slow.backend === 'webgpu' ? 'WebGPU' : 'WebGL'} ran at only ${gpuRate.toFixed(0)} positions/s${slow.gpu ? ` on ${slow.gpu}` : ''}, slower than the CPU, so the CPU is used.`;
-      post({ type: 'progress', phase: 'runtime', message: 'That GPU is slow, switching to the CPU' });
-      for (const old of new Set([slow.session, ...slow.sessions.values()])) await old.release().catch(() => undefined);
-      created = await createSession(model.bytes, 'wasm', req.ortExternalBase, onStep, req.threads ?? 0);
-      created.webgpuNote = slow.backend === 'webgpu' ? why : slow.webgpuNote;
-      created.webgpuProblem = slow.backend === 'webgpu' ? 'slow-gpu' : slow.webgpuProblem;
-      created.webglNote = slow.backend === 'webgl' ? why : slow.webglNote;
-      created.gpu = slow.gpu;
-      prepared = await prepare(created);
+    // A GPU that is not clearly fast is timed against the CPU, and the faster one is used. Only on automatic;
+    // ?backend=webgl / webgpu stays what was asked for.
+    const rate = (p: Prepared) => Math.max(...p.rows.map((r) => r.positionsPerSecond));
+    if (needsCpuCheck(req.backend, created.backend, rate(prepared))) {
+      post({ type: 'progress', phase: 'runtime', message: 'Checking that this GPU is faster than the CPU' });
+      const gpu = { created, prepared };
+      const cpuCreated = await createSession(model.bytes, 'wasm', req.ortExternalBase, onStep, req.threads ?? 0);
+      const cpuPrepared = await prepare(cpuCreated);
+      if (cpuIsFaster(rate(gpu.prepared), rate(cpuPrepared))) {
+        const why = slowGpuNote(gpu.created.backend, gpu.created.gpu, rate(gpu.prepared), rate(cpuPrepared));
+        await release(gpu.created);
+        cpuCreated.webgpuNote = gpu.created.backend === 'webgpu' ? why : gpu.created.webgpuNote;
+        cpuCreated.webgpuProblem = gpu.created.backend === 'webgpu' ? 'slow-gpu' : gpu.created.webgpuProblem;
+        cpuCreated.webglNote = gpu.created.backend === 'webgl' ? why : gpu.created.webglNote;
+        cpuCreated.gpu = gpu.created.gpu;
+        created = cpuCreated;
+        prepared = cpuPrepared;
+      } else {
+        await release(cpuCreated);
+        evaluator = gpu.prepared.ev;
+      }
     }
     const { rows, batch, buckets, ev } = prepared;
     autoBatch = batch;

@@ -49,26 +49,21 @@ export function webgpuAdvice(info: Info, ua: string): Advice | null {
   let why: string;
   switch (info.webgpuProblem) {
     case 'no-api':
-      why = 'this browser does not offer WebGPU (navigator.gpu is missing).';
+      why = 'This browser does not offer WebGPU (navigator.gpu is missing).';
       break;
     case 'no-adapter':
-      why = 'the browser offers WebGPU but found no usable GPU for it (the GPU or driver is not supported, or Vulkan is not available).';
+      why = 'The browser offers WebGPU but found no usable GPU for it (the GPU or driver is not supported, or Vulkan is not available).';
       break;
     case 'forced-off':
-      why = 'the page address has ?backend= in it, which picks the backend by hand. Remove it to use WebGPU when it is available.';
+      why = 'The page address has ?backend= in it, which picks the backend by hand. Remove it to use WebGPU when it is available.';
       break;
     case 'no-jspi':
       why = 'WebGPU is there, but this browser lacks the WebAssembly feature (JSPI) the bundled WebGPU runtime needs, and the fallback runtime is switched off.';
       break;
-    case 'slow-gpu':
-    case 'adapter-error':
-    case 'runtime-failed':
-      why = (info.webgpuNote ?? 'WebGPU could not be started.').replace(/^./, (c) => c.toLowerCase());
-      break;
     default:
-      why = info.webgpuNote ? info.webgpuNote.replace(/^./, (c) => c.toLowerCase()) : 'it was not available.';
+      why = info.webgpuNote ?? 'WebGPU could not be started.';
   }
-  const reason = `Running on ${using} because ${why}`;
+  const reason = `Running on ${using}. ${why}`;
 
   const steps: string[] = [];
   if (info.webgpuProblem === 'forced-off') return { reason, steps };
@@ -108,7 +103,7 @@ export function webgpuAdvice(info: Info, ua: string): Advice | null {
   }
   if (info.backend === 'wasm' && info.webglNote) {
     steps.push(`WebGL was not used either: ${info.webglNote}`);
-    if (/positions\/s/.test(info.webglNote)) steps.push(dualGpuTip(system));
+    if (/positions\/s and the CPU/.test(info.webglNote)) steps.push(dualGpuTip(system));
   }
   return { reason, steps };
 }

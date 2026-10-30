@@ -12,11 +12,12 @@ describe('cpuThreads', () => {
   it('is 1 without cross-origin isolation, whatever the core count', () => {
     expect(cpuThreads(32, false)).toBe(1);
   });
-  it('leaves one core free and stops at 4 (more threads were not faster in the measurements)', () => {
+  it('leaves one core free and stops at 8 (more threads were not faster in the measurements)', () => {
     expect(cpuThreads(2, true)).toBe(1);
     expect(cpuThreads(4, true)).toBe(3);
-    expect(cpuThreads(8, true)).toBe(4);
-    expect(cpuThreads(32, true)).toBe(4);
+    expect(cpuThreads(8, true)).toBe(7);
+    expect(cpuThreads(9, true)).toBe(8);
+    expect(cpuThreads(32, true)).toBe(8);
   });
   it('copes with a missing core count', () => {
     expect(cpuThreads(0, true)).toBe(1);
@@ -119,5 +120,23 @@ describe.skipIf(!hasModel)('withFixedBatch on the real network', () => {
   it('rejects things that are not a model or not a valid batch', () => {
     expect(() => withFixedBatch(new Uint8Array([1, 2, 3]), 1)).toThrow();
     expect(() => withFixedBatch(bytes(), 0)).toThrow();
+  });
+});
+
+describe('backendChoice', () => {
+  it('only times the CPU on automatic, for a GPU that is not clearly fast', async () => {
+    const { needsCpuCheck, CLEARLY_FAST_POSITIONS_PER_SECOND } = await import('../src/worker/backendChoice');
+    expect(needsCpuCheck('auto', 'webgl', 10)).toBe(true);
+    expect(needsCpuCheck('auto', 'webgpu', CLEARLY_FAST_POSITIONS_PER_SECOND - 1)).toBe(true);
+    expect(needsCpuCheck('auto', 'webgpu', 900)).toBe(false);
+    expect(needsCpuCheck('webgl', 'webgl', 10)).toBe(false); // ?backend=webgl is what was asked for
+    expect(needsCpuCheck('auto', 'wasm', 5)).toBe(false);
+  });
+  it('picks the faster; a tie goes to the CPU (no GPU memory held for nothing)', async () => {
+    const { cpuIsFaster, slowGpuNote } = await import('../src/worker/backendChoice');
+    expect(cpuIsFaster(10, 40)).toBe(true);
+    expect(cpuIsFaster(120, 40)).toBe(false);
+    expect(cpuIsFaster(40, 40)).toBe(true);
+    expect(slowGpuNote('webgl', 'AMD Radeon', 10, 40)).toBe('WebGL on AMD Radeon ran at 10 positions/s and the CPU at 40, so the CPU is used.');
   });
 });
