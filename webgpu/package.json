@@ -2,7 +2,7 @@
   "name": "sigma-go-web",
   "private": true,
   "version": "0.1.0",
-  "description": "Browser version of the Sigma-Go chess engine (WebGPU with a WebAssembly fallback)",
+  "description": "Browser version of the Sigma-Go chess engine (WebGPU, then WebGL, then WebAssembly on the CPU)",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:browser": "node test/browser/parity.mjs",
     "test:fast": "vitest run test/encoding.test.ts test/search.test.ts test/modelLoader.test.ts test/static.test.ts",
     "export:model": "../.venv/bin/python ../scripts/export_onnx.py",
     "fixtures": "../.venv/bin/python ../scripts/make_fixtures.py"
