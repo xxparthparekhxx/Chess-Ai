@@ -48,7 +48,8 @@ describe('deploy config', () => {
   });
 
   it('production build points at Hugging Face and the dev default is local', () => {
-    expect(read('.env.production')).toContain('https://huggingface.co/xxparthparekhxx/sigma-go/resolve/main/chess_net.onnx');
+    // pinned to a commit of the model repo, not to a moving branch
+    expect(read('.env.production')).toMatch(/https:\/\/huggingface\.co\/xxparthparekhxx\/sigma-go\/resolve\/[0-9a-f]{40}\/chess_net\.onnx/);
     expect(read('src/config.ts')).toContain("'/model/chess_net.onnx'");
   });
 
