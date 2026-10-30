@@ -1,0 +1,81 @@
+{
+ "tag": "base",
+ "checkpoint": "models/chess_net.pth",
+ "settings": {
+  "simulations": 800,
+  "leaves_per_call": 8,
+  "temperature": 0,
+  "dirichlet_noise": false,
+  "c_puct": 1.0,
+  "stockfish": "Stockfish 19 (official linux x86-64 universal), UCI_LimitStrength, Threads=1, Hash=16",
+  "stockfish_nodes_per_move": 100000,
+  "adjudication": "full-strength Stockfish (20000 nodes) beyond +/-1000 cp for 6 consecutive plies; draw at 300 plies; rules draws claimed",
+  "openings": "24 positions of 2-4 random plies, |eval| <= 100 cp, each played with both colours (eval/openings.json)",
+  "ci": "95% Wilson interval on the score, draws counted as half"
+ },
+ "levels": [
+  {
+   "stockfish_uci_elo": 1320,
+   "games": 48,
+   "wins": 35,
+   "draws": 7,
+   "losses": 6,
+   "score": 0.8020833333333334,
+   "score_ci95": [
+    0.6689526368185342,
+    0.8904436781100175
+   ],
+   "elo_diff": 243.0948496878612,
+   "elo_diff_ci95": [
+    122.2020947597426,
+    363.98760461597993
+   ],
+   "elo_estimate": 1563.0948496878611,
+   "adjudicated": 36,
+   "max_plies": 1,
+   "avg_plies": 63.0625
+  },
+  {
+   "stockfish_uci_elo": 1600,
+   "games": 48,
+   "wins": 23,
+   "draws": 16,
+   "losses": 9,
+   "score": 0.6458333333333334,
+   "score_ci95": [
+    0.5043879645406409,
+    0.7656654288731427
+   ],
+   "elo_diff": 104.3651089823995,
+   "elo_diff_ci95": [
+    3.049148339150404,
+    205.68106962564866
+   ],
+   "elo_estimate": 1704.3651089823995,
+   "adjudicated": 25,
+   "max_plies": 7,
+   "avg_plies": 93.89583333333333
+  },
+  {
+   "stockfish_uci_elo": 2000,
+   "games": 48,
+   "wins": 3,
+   "draws": 18,
+   "losses": 27,
+   "score": 0.25,
+   "score_ci95": [
+    0.1492048880971003,
+    0.3878464374792707
+   ],
+   "elo_diff": -190.84850188786498,
+   "elo_diff_ci95": [
+    -302.41677391786027,
+    -79.28022985786976
+   ],
+   "elo_estimate": 1809.151498112135,
+   "adjudicated": 23,
+   "max_plies": 6,
+   "avg_plies": 108.0
+  }
+ ]
+}

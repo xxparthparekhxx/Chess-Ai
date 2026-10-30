@@ -93,6 +93,30 @@ To train the AI on your own PGN datasets:
 
 ---
 
+## 📏 Measured strength
+
+`eval/run_match.py` plays the Python engine (`src/mcts.py` on the GPU, 800 simulations per move, temperature 0, no
+Dirichlet noise, 8 leaves per network call) against Stockfish 19 limited with `UCI_LimitStrength` + `UCI_Elo` (Threads=1,
+Hash=16, 100,000 nodes per move). Stockfish is only a test opponent; it is not part of the project. 24 openings
+(2–4 random plies, level according to a full-strength Stockfish) are each played with both colours, so every level is 48 games.
+A game is adjudicated when a full-strength Stockfish (20,000 nodes) holds a result beyond ±1000 cp for 6 plies in a row;
+draw rules are applied and a game still going at 300 plies is drawn. Intervals are 95% Wilson on the score, draws counted
+as half. PGNs, per-game JSON and summaries are in `eval/results/<tag>/`.
+
+UCI_Elo is calibrated by Stockfish's developers against other engines at much longer time controls, so the Elo figures
+below, from a node-limited match at fast settings, are approximate and say how strong the net is *against this
+opponent*, not a rating on any human or federation scale.
+
+Baseline, `models/chess_net.pth` (the net trained on human games only), tag `base`:
+
+| Stockfish UCI_Elo | Games | W / D / L | Score | 95% CI | Elo diff | Implied Elo |
+|---|---|---|---|---|---|---|
+| 1320 | 48 | 35 / 7 / 6 | 0.802 | 0.67–0.89 | +243 (+122 to +364) | 1563 |
+| 1600 | 48 | 23 / 16 / 9 | 0.646 | 0.50–0.77 | +104 (+3 to +206) | 1704 |
+| 2000 | 48 | 3 / 18 / 27 | 0.250 | 0.15–0.39 | -191 (-302 to -79) | 1809 |
+
+---
+
 ## 🧠 Technical Architecture
 
 **How it thinks:**
