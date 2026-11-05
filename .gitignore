@@ -8,3 +8,4 @@ __pycache__
 webgpu/node_modules/
 webgpu/dist/
 models/finetune/
+runs/
