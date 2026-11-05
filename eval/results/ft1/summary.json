@@ -1,0 +1,39 @@
+{
+ "tag": "ft1",
+ "checkpoint": "models/finetune/best.pth",
+ "settings": {
+  "simulations": 800,
+  "leaves_per_call": 8,
+  "temperature": 0,
+  "dirichlet_noise": false,
+  "c_puct": 1.0,
+  "stockfish": "Stockfish 19 (official linux x86-64 universal), UCI_LimitStrength, Threads=1, Hash=16",
+  "stockfish_nodes_per_move": 100000,
+  "adjudication": "full-strength Stockfish (20000 nodes) beyond +/-1000 cp for 6 consecutive plies; draw at 300 plies; rules draws claimed",
+  "openings": "24 positions of 2-4 random plies, |eval| <= 100 cp, each played with both colours (eval/openings.json)",
+  "ci": "95% Wilson interval on the score, draws counted as half"
+ },
+ "levels": [
+  {
+   "stockfish_uci_elo": 2000,
+   "games": 48,
+   "wins": 24,
+   "draws": 14,
+   "losses": 10,
+   "score": 0.6458333333333334,
+   "score_ci95": [
+    0.5043879645406409,
+    0.7656654288731427
+   ],
+   "elo_diff": 104.3651089823995,
+   "elo_diff_ci95": [
+    3.049148339150404,
+    205.68106962564866
+   ],
+   "elo_estimate": 2104.3651089823993,
+   "adjudicated": 29,
+   "max_plies": 2,
+   "avg_plies": 94.16666666666667
+  }
+ ]
+}

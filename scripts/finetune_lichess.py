@@ -27,11 +27,28 @@ from model import ChessNet  # noqa: E402
 
 VALUE_WEIGHT = 2.0
 dev = "cuda"
+BF16 = True            # --fp32 turns autocast off (GPUs without bf16, such as Turing, only emulate it)
+CHANNELS_LAST = True   # --no-channels-last (slower on some GPUs, e.g. 40% on a GTX 1650 Ti)
 
 
-def load_split(path, split):
-    arrs = [np.load(os.path.join(path, f"{split}_{n}.npy")) for n in ("board", "turn", "policy", "value", "legal")]
-    return [torch.from_numpy(a).to(dev) for a in arrs]
+NAMES = ("board", "turn", "policy", "value", "legal")
+
+
+def load_split(path, split, on_gpu=("board", "turn", "policy", "value")):
+    """Arrays named in on_gpu are loaded onto the GPU; the rest stay memory-mapped on the host and are
+    gathered per batch. legal (256 bytes a row, most of the data) is always on the host, so tens of
+    millions of positions fit; on a small GPU pass on_gpu=() to keep everything on the host."""
+    out = []
+    for n in NAMES:
+        a = np.load(os.path.join(path, f"{split}_{n}.npy"), mmap_mode="r")
+        out.append(torch.from_numpy(np.ascontiguousarray(a)).to(dev) if n in on_gpu and n != "legal" else a)
+    return out
+
+
+def take(data, idx):
+    """Rows idx (a sorted int64 numpy array) of a split from load_split, as GPU tensors."""
+    i = torch.from_numpy(idx).to(dev)
+    return [d[i] if torch.is_tensor(d) else torch.from_numpy(np.ascontiguousarray(d[idx])).to(dev) for d in data]
 
 
 def planes(board, turn):
@@ -52,8 +69,11 @@ def legal_mask(legal):
 
 def forward_loss(model, batch):
     board, turn, pol, val, legal = batch
-    with torch.autocast("cuda", dtype=torch.bfloat16):
-        logits, v = model(planes(board, turn).contiguous(memory_format=torch.channels_last))
+    x = planes(board, turn)
+    if CHANNELS_LAST:
+        x = x.contiguous(memory_format=torch.channels_last)
+    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=BF16):
+        logits, v = model(x)
     logits = logits.float().masked_fill(~legal_mask(legal), float("-inf"))
     logp = F.log_softmax(logits, dim=1)
     ce = -logp.gather(1, pol.long().view(-1, 1)).mean()
@@ -69,7 +89,7 @@ def evaluate(model, data, n, bs=2048):
     ce = mse = top1 = 0.0
     seen = 0
     for i in range(0, n, bs):
-        batch = [d[i:i + bs] for d in data]
+        batch = take(data, np.arange(i, min(i + bs, n)))
         c, m, t = forward_loss(model, batch)
         k = batch[0].shape[0]
         ce += c.item() * k; mse += m.item() * k; top1 += t.item() * k; seen += k
@@ -90,11 +110,16 @@ def main():
     ap.add_argument("--val-n", type=int, default=200_000)
     ap.add_argument("--max-minutes", type=float, default=0, help="stop early (checkpoint kept) after this long")
     ap.add_argument("--bench", type=int, default=0, help="only time this many steps and exit")
+    ap.add_argument("--fp32", action="store_true", help="no bf16 autocast")
+    ap.add_argument("--no-channels-last", action="store_true")
+    ap.add_argument("--host-data", action="store_true", help="keep all training arrays on the host (small GPUs)")
     a = ap.parse_args()
+    global BF16, CHANNELS_LAST
+    BF16, CHANNELS_LAST = not a.fp32, not a.no_channels_last
     os.makedirs(a.out, exist_ok=True)
     torch.manual_seed(0)
 
-    train = load_split(a.data, "train")
+    train = load_split(a.data, "train", on_gpu=() if a.host_data else ("board", "turn", "policy", "value"))
     val = load_split(a.data, "val")
     n_train = train[0].shape[0]
     n_val = min(a.val_n, val[0].shape[0])
@@ -103,7 +128,8 @@ def main():
 
     model = ChessNet(num_res_blocks=NUM_RES_BLOCKS).to(dev)
     model.load_state_dict(torch.load(a.init, map_location=dev))
-    model = model.to(memory_format=torch.channels_last)
+    if CHANNELS_LAST:
+        model = model.to(memory_format=torch.channels_last)
     model.train()
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
 
@@ -120,21 +146,22 @@ def main():
         log.write(json.dumps(d) + "\n"); log.flush()
 
     base = evaluate(model, val, n_val)
-    const = float(((val[3][:n_val] - train[3].mean()) ** 2).mean())
+    train_mean = float(train[3].float().mean()) if torch.is_tensor(train[3]) else float(np.mean(train[3]))
+    const = float(((val[3][:n_val] - train_mean) ** 2).mean())
     record({"step": 0, **base, "val_mse_constant_baseline": const})
 
     best = base["val_ce"] + VALUE_WEIGHT * base["val_mse"]
-    perm = torch.randperm(n_train, device=dev)
+    perm = np.random.default_rng(0).permutation(n_train)
     pos = 0
     t0 = time.time()
     run_ce = run_mse = 0.0
     for step in range(1, a.steps + 1):
         if pos + a.batch > n_train:
-            perm = torch.randperm(n_train, device=dev); pos = 0
-        idx = perm[pos:pos + a.batch]; pos += a.batch
+            perm = np.random.default_rng(step).permutation(n_train); pos = 0
+        idx = np.sort(perm[pos:pos + a.batch]); pos += a.batch
         for g in opt.param_groups:
             g["lr"] = lr_at(step)
-        ce, mse, _ = forward_loss(model, [d[idx] for d in train])
+        ce, mse, _ = forward_loss(model, take(train, idx))
         loss = ce + VALUE_WEIGHT * mse
         opt.zero_grad(set_to_none=True)
         loss.backward()

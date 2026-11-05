@@ -41,6 +41,7 @@ def main():
     ap.add_argument("--window", type=int, default=6)
     ap.add_argument("--reuse", type=float, default=4.0, help="times each self-play position is sampled, on average")
     ap.add_argument("--batch", type=int, default=512)
+    ap.add_argument("--anchor", default="data/lichess_evals", help="Stockfish-labelled positions (prep_lichess_evals.py)")
     ap.add_argument("--anchor-frac", type=float, default=0.25)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--gate-openings", type=int, default=32)
@@ -90,7 +91,7 @@ def main():
             steps = max(100, math.ceil(a.reuse * sp_stats["positions"] / n_self))
             sh([PY, "-u", "selfplay/train.py", "--state", trainer, "--init", state["best"], "--out", cand,
                 "--games", *[os.path.join(run, "games", d) for d in dirs], "--steps", str(steps),
-                "--batch", str(a.batch), "--anchor-frac", str(a.anchor_frac), "--lr", str(a.lr), "--seed", str(g)], log)
+                "--batch", str(a.batch), "--anchor", a.anchor, "--anchor-frac", str(a.anchor_frac), "--lr", str(a.lr), "--seed", str(g)], log)
         with open(cand + ".json") as f:
             tr = json.load(f)
 

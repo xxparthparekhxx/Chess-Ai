@@ -55,6 +55,8 @@ def encode(fen):
 
 def process_row_group(args):
     split, shard, rg, out = args
+    if os.path.exists(os.path.join(out, f"part_{split}_{shard}_{rg}.npz")):     # done by an earlier run
+        return split, 0, 0, 0
     import chess
     import pyarrow.parquet as pq
     from huggingface_hub import HfFileSystem
@@ -107,7 +109,8 @@ def process_row_group(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--train-groups", type=int, default=12, help="row groups (~1M rows each) for training")
+    ap.add_argument("--train-groups", type=int, default=12, help="training shards, one row group (~1M rows) each")
+    ap.add_argument("--per-shard", type=int, default=1, help="row groups read from each training shard")
     ap.add_argument("--val-groups", type=int, default=1)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--seed", type=int, default=7)
@@ -121,6 +124,17 @@ def main():
     val_shards = shards[:a.val_groups]
     train_shards = shards[a.val_groups:a.val_groups + a.train_groups]
     jobs = {"train": [(s, rng.randrange(50)) for s in train_shards], "val": [(s, rng.randrange(50)) for s in val_shards]}
+    if a.per_shard > 1:
+        # more row groups from the same training shards; the first pick per shard (and the validation
+        # row group, from a shard never used for training) stay what they are with --per-shard 1
+        import pyarrow.parquet as pq
+        from huggingface_hub import HfFileSystem
+        fs = HfFileSystem()
+        extra = random.Random(a.seed + 1)
+        for s, rg in list(jobs["train"]):
+            with fs.open(REPO.format(s), "rb") as f:
+                n_groups = pq.ParquetFile(f).metadata.num_row_groups     # 45 to 55 depending on the shard
+            jobs["train"] += [(s, r) for r in extra.sample([r for r in range(n_groups) if r != rg], a.per_shard - 1)]
     print(jobs, flush=True)
 
     import multiprocessing as mp
@@ -134,21 +148,32 @@ def main():
                 stats[sp][i] += v
             print("done", sp, nrows, uniq, skipped, flush=True)
 
+    names = ["board", "turn", "policy", "value", "legal"]
     for split in jobs:
-        files = sorted(f for f in os.listdir(parts_dir) if f.startswith(f"part_{split}_"))
-        parts = [np.load(os.path.join(parts_dir, f)) for f in files]
-        names = ["board", "turn", "policy", "value", "legal"]
-        cat = [np.concatenate([p[n] for p in parts]) for n in names]
-        # drop duplicate positions that appeared in more than one row group
-        _, keep = np.unique(np.concatenate([cat[0], cat[1][:, None]], axis=1), axis=0, return_index=True)
+        files = [os.path.join(parts_dir, f) for f in sorted(os.listdir(parts_dir)) if f.startswith(f"part_{split}_")]
+        counts = [np.load(f)["turn"].shape[0] for f in files]
+        # drop duplicate positions that appeared in more than one row group (board + side to move)
+        bt = np.concatenate([np.concatenate([np.load(f)["board"], np.load(f)["turn"][:, None]], 1) for f in files])
+        _, keep = np.unique(bt, axis=0, return_index=True)
+        del bt
         keep.sort()
-        cat = [c[keep] for c in cat]
-        for n, c in zip(names, cat):
-            np.save(os.path.join(a.out, f"{split}_{n}.npy"), c)
+        # write the kept rows straight into .npy files, one part at a time, so memory stays near one part
+        starts = np.cumsum([0] + counts)
+        for n in names:
+            first = np.load(files[0])[n]
+            out_arr = np.lib.format.open_memmap(os.path.join(a.out, f"{split}_{n}.npy"), mode="w+",
+                                                dtype=first.dtype, shape=(len(keep),) + first.shape[1:])
+            pos = 0
+            for f, lo, hi in zip(files, starts[:-1], starts[1:]):
+                sel = keep[(keep >= lo) & (keep < hi)] - lo
+                out_arr[pos:pos + len(sel)] = np.load(f)[n][sel]
+                pos += len(sel)
+            out_arr.flush()
+            del out_arr
+        val = np.load(os.path.join(a.out, f"{split}_value.npy"), mmap_mode="r")
         rows, uniq, skipped = stats[split]
-        print(f"{split}: {rows} rows read, {uniq} positions, {skipped} skipped, {len(cat[0])} kept; "
-              f"value mean {cat[3].mean():+.3f} std {cat[3].std():.3f}", flush=True)
-
+        print(f"{split}: {rows} rows read, {uniq} positions, {skipped} skipped, {len(keep)} kept; "
+              f"value mean {val.mean():+.3f} std {val.std():.3f}", flush=True)
 
 if __name__ == "__main__":
     main()
