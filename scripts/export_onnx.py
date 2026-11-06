@@ -61,9 +61,11 @@ def sha256_of(path):
     return h.hexdigest()
 
 
-def load_model():
+def load_model(path=MODEL_PATH):
     model = ChessNet(num_res_blocks=NUM_RES_BLOCKS)
-    state = torch.load(MODEL_PATH, map_location="cpu")
+    state = torch.load(path, map_location="cpu")
+    if "model" in state:  # a trainer state (model + optimizer)
+        state = state["model"]
     model.load_state_dict(state)
     model.eval()
     return model
@@ -152,6 +154,7 @@ def main():
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help="where to write the .onnx files (default: webgpu/model)")
     ap.add_argument("--name", default="chess_net", help="base file name")
     ap.add_argument("--fp16-weights", action="store_true", help="also write <name>.fp16w.onnx (fp16 weights, fp32 compute)")
+    ap.add_argument("--ckpt", default=MODEL_PATH, help="PyTorch checkpoint to export (default: models/chess_net.pth)")
     ap.add_argument("--parity-positions", type=int, default=96, help="number of real positions used for the parity check")
     args = ap.parse_args()
 
@@ -159,8 +162,8 @@ def main():
     fp32_path = os.path.join(args.out_dir, args.name + ".onnx")
 
     torch.set_grad_enabled(False)
-    print(f"loading {MODEL_PATH}")
-    model = load_model()
+    print(f"loading {args.ckpt}")
+    model = load_model(args.ckpt)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"parameters: {n_params:,}")
 
@@ -189,8 +192,8 @@ def main():
     onnx.checker.check_model(proto)
     # Stamp where the file came from so a stale export is easy to spot.
     for k, v in {
-        "source": "models/chess_net.pth",
-        "source_sha256": sha256_of(MODEL_PATH),
+        "source": os.path.relpath(os.path.abspath(args.ckpt), ROOT),
+        "source_sha256": sha256_of(args.ckpt),
         "input": "planes float32 [batch,14,8,8]",
         "outputs": f"policy float32 [batch,{ACTION_SIZE}] logits; value float32 [batch,1] tanh, White's point of view",
     }.items():
@@ -201,7 +204,7 @@ def main():
     assert "BatchNormalization" not in ops, "BatchNorm should be folded away"
 
     report = {
-        "source_sha256": sha256_of(MODEL_PATH),
+        "source_sha256": sha256_of(args.ckpt),
         "parameters": n_params,
         "opset": OPSET,
         "ops": ops,

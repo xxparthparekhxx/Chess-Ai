@@ -115,6 +115,14 @@ Baseline, `models/chess_net.pth` (the net trained on human games only), tag `bas
 | 1600 | 48 | 23 / 16 / 9 | 0.646 | 0.50–0.77 | +104 (+3 to +206) | 1704 |
 | 2000 | 48 | 3 / 18 / 27 | 0.250 | 0.15–0.39 | -191 (-302 to -79) | 1809 |
 
+After two rounds of fine-tuning on Lichess's Stockfish evaluations (`scripts/finetune_lichess.py`; the second round is
+`runs/ft2/best.pth`, 23.7M positions), tag `ft2`. This is the network the browser version plays (Hugging Face
+`xxparthparekhxx/sigma-go`; the human-games net is its `base` revision):
+
+| Stockfish UCI_Elo | Games | W / D / L | Score | 95% CI |
+|---|---|---|---|---|
+| 2000 | 48 | 27 / 13 / 8 | 0.698 | 0.56–0.81 |
+
 ---
 
 ## 🧠 Technical Architecture

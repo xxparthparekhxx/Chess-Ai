@@ -153,6 +153,7 @@ def random_playout_positions(rng, games, max_plies):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--ckpt", default=MODEL_PATH, help="PyTorch checkpoint (default: models/chess_net.pth)")
     ap.add_argument("--sims", type=int, nargs="+", default=[200, 800], help="MCTS simulation counts to record")
     ap.add_argument("--random-games", type=int, default=120, help="random playouts used for order/terminal cases")
     ap.add_argument("--no-mcts", action="store_true")
@@ -160,7 +161,10 @@ def main():
 
     torch.set_grad_enabled(False)
     model = ChessNet(num_res_blocks=NUM_RES_BLOCKS)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    state = torch.load(args.ckpt, map_location="cpu")
+    if "model" in state:  # a trainer state (model + optimizer)
+        state = state["model"]
+    model.load_state_dict(state)
     model.eval()
 
     # --- move table ---
@@ -271,7 +275,7 @@ def main():
 
     fixtures = {
         "meta": {
-            "model_sha256": sha256_of(MODEL_PATH),
+            "model_sha256": sha256_of(args.ckpt),
             "torch": torch.__version__,
             "python_chess": chess.__version__,
             "numpy": np.__version__,
