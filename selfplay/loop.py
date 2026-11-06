@@ -50,6 +50,10 @@ def main():
     ap.add_argument("--ladder-every", type=int, default=5, help="promotions between Stockfish checks (0 = never)")
     ap.add_argument("--gens", type=int, default=10_000)
     ap.add_argument("--actor-args", default="", help="extra actor.py arguments, e.g. '--full-sims 600'")
+    ap.add_argument("--targets", choices=("search", "stockfish"), default="search",
+                    help="stockfish: relabel.py labels every self-play position (see train.py)")
+    ap.add_argument("--relabel-nodes", type=int, default=50_000)
+    ap.add_argument("--warmup", type=int, default=0)
     a = ap.parse_args()
     run = os.path.abspath(a.run)
     for d in ("games", "nets", "gates", "logs"):
@@ -82,6 +86,8 @@ def main():
                 "--seed", str(g), *a.actor_args.split()], log)
         with open(os.path.join(sp, "stats.json")) as f:
             sp_stats = json.load(f)
+        if a.targets == "stockfish" and not os.path.exists(os.path.join(sp, "sf.npz")):
+            sh([PY, "-u", "selfplay/relabel.py", sp, "--nodes", str(a.relabel_nodes)], log)
 
         cand = os.path.join(run, "nets", f"cand_{g:03d}.pth")
         if not os.path.exists(cand + ".json"):
@@ -91,7 +97,8 @@ def main():
             steps = max(100, math.ceil(a.reuse * sp_stats["positions"] / n_self))
             sh([PY, "-u", "selfplay/train.py", "--state", trainer, "--init", state["best"], "--out", cand,
                 "--games", *[os.path.join(run, "games", d) for d in dirs], "--steps", str(steps),
-                "--batch", str(a.batch), "--anchor", a.anchor, "--anchor-frac", str(a.anchor_frac), "--lr", str(a.lr), "--seed", str(g)], log)
+                "--batch", str(a.batch), "--anchor", a.anchor, "--anchor-frac", str(a.anchor_frac), "--lr", str(a.lr), "--seed", str(g),
+                "--targets", a.targets, "--warmup", str(a.warmup)], log)
         with open(cand + ".json") as f:
             tr = json.load(f)
 

@@ -6,6 +6,11 @@ against the search's visit shares for self-play positions that had a full search
 best move for anchor positions. Value loss is MSE against the game result (self-play) or
 tanh(cp / 400) (anchor), both from White's side, weighted by --value-weight.
 
+With --targets stockfish, self-play rows are labelled from <dir>/sf.npz (relabel.py) instead:
+policy = Stockfish's move for every row, value = Stockfish's evaluation. Self-play then only picks
+the positions. --warmup ramps the learning rate over the first steps of the whole run (counted
+across generations), so a freshly fine-tuned network isn't hit with the full rate at once.
+
 Model and optimizer state carry over between generations in --state. The trained weights are also
 written as a plain state dict to --out (what match.py, eval/run_match.py and the exporters load).
 """
@@ -57,9 +62,18 @@ def onehot_target(legal, policy):
     return (legal == policy.view(-1, 1)).float()
 
 
-def load_games(dirs):
+def load_games(dirs, targets="search"):
     parts = [np.load(os.path.join(d, "positions.npz")) for d in dirs]
-    return {k: np.concatenate([p[k] for p in parts]) for k in ("board", "turn", "legal", "pi", "z")}
+    out = {k: np.concatenate([p[k] for p in parts]) for k in ("board", "turn", "legal", "pi", "z")}
+    if targets == "stockfish":
+        sf = [np.load(os.path.join(d, "sf.npz")) for d in dirs]
+        move = np.concatenate([s["sf_move"] for s in sf]).astype(np.int64)
+        pi = np.zeros(out["pi"].shape, dtype=np.float16)
+        ok = move >= 0
+        pi[np.nonzero(ok)[0], move[ok]] = 1.0          # rows without a usable move get no policy target
+        out["pi"] = pi
+        out["z"] = np.concatenate([s["sf_value"] for s in sf]).astype(np.float32)
+    return out
 
 
 class Anchor:
@@ -97,6 +111,8 @@ def main():
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--value-weight", type=float, default=1.5)
+    ap.add_argument("--targets", choices=("search", "stockfish"), default="search")
+    ap.add_argument("--warmup", type=int, default=0, help="linear warmup steps, counted over the whole run")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
@@ -115,7 +131,7 @@ def main():
         trained_steps = 0
     model.train()
 
-    sp = load_games(a.games)
+    sp = load_games(a.games, a.targets)
     sp_t = {k: torch.from_numpy(v).to(dev) for k, v in sp.items()}
     n_sp = sp["z"].shape[0]
     anc, anc_val = Anchor(a.anchor, "train"), Anchor(a.anchor, "val")
@@ -128,6 +144,9 @@ def main():
     t0 = time.time()
     sums = np.zeros(6)
     for step in range(a.steps):
+        if a.warmup:
+            for g in opt.param_groups:
+                g["lr"] = a.lr * min(1.0, (trained_steps + step + 1) / a.warmup)
         i = torch.from_numpy(rng.integers(0, n_sp, n_self)).to(dev)
         own = (sp_t["board"][i], sp_t["turn"][i], sp_t["legal"][i], sp_t["pi"][i].float(), sp_t["z"][i])
         ref = anc.batch(rng.integers(0, anc.n, n_anc))

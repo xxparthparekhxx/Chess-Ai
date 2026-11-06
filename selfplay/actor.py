@@ -16,6 +16,7 @@ Output in --out: positions.npz, games.pgn, stats.json (written last; its presenc
   pi     float16 [N,128] visit share of each legal move (all 0 when the move had a fast search)
   z      float32 [N]    game result from White's side
   q      float32 [N]    root value from White's side after the search
+  fen    str [N]        the position, so relabel.py can hand it to Stockfish exactly (castling, en passant)
 """
 import argparse
 import json
@@ -39,7 +40,7 @@ class Game:
         self.board = chess.Board()
         self.search = Search(self.board, ev, a.c_puct)
         self.no_resign = rng.random() < a.no_resign
-        self.rec = []                  # (bits, turn, legal idx, pi or None, q white)
+        self.rec = []                  # (bits, turn, legal idx, pi or None, q white, fen)
         self.low = {chess.WHITE: 0, chess.BLACK: 0}
         self.would_resign = None       # side that would have resigned, in no-resign games
         self.result = None
@@ -71,7 +72,7 @@ class Game:
         if len(r.moves) <= MAX_LEGAL:
             pi = (visits / visits.sum()).astype(np.float16) if self.full and len(r.moves) > 1 else None
             self.rec.append((board_bits(b), b.turn, [move_index(m) for m in r.moves], pi,
-                             q if b.turn == chess.WHITE else -q))
+                             q if b.turn == chess.WHITE else -q, b.fen()))
         if len(b.move_stack) < a.temp_plies:
             p = visits / visits.sum()
             i = int(self.rng.choice(len(p), p=p))
@@ -182,7 +183,7 @@ def write(a, games, evals, seconds):
         z[i] = zval[g.result]
     np.savez(os.path.join(a.out, "positions.npz"), board=bits_to_codes(bits),
              turn=np.array([r[1] for _, r in rows], dtype=np.uint8), legal=legal, pi=pi, z=z,
-             q=np.array([r[4] for _, r in rows], dtype=np.float32))
+             q=np.array([r[4] for _, r in rows], dtype=np.float32), fen=np.array([r[5] for _, r in rows]))
 
     with open(os.path.join(a.out, "games.pgn"), "w") as f:
         for g in games:
