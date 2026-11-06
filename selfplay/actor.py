@@ -73,7 +73,10 @@ class Game:
             pi = (visits / visits.sum()).astype(np.float16) if self.full and len(r.moves) > 1 else None
             self.rec.append((board_bits(b), b.turn, [move_index(m) for m in r.moves], pi,
                              q if b.turn == chess.WHITE else -q, b.fen()))
-        if len(b.move_stack) < a.temp_plies:
+        if len(r.moves) == 1 or visits.sum() <= 0:
+            # ready() lets a forced move through before the root has any visits; 0/0 would be NaN
+            i = 0 if len(r.moves) == 1 else int(np.argmax(r.P))
+        elif len(b.move_stack) < a.temp_plies:
             p = visits / visits.sum()
             i = int(self.rng.choice(len(p), p=p))
         else:
